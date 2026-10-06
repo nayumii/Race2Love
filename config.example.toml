@@ -2,6 +2,7 @@ version = 1
 
 [lovense]
 host = "127.0.0.1"
+protocol = "http" # http or https; HTTPS requires a valid certificate hostname.
 # port = 20010 # Example only: use the port/protocol reported by your Remote.
 automatic_reconnect = true
 request_timeout_ms = 1000

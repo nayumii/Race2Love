@@ -30,6 +30,22 @@ pub trait HapticDevice: Send + Sync {
     fn is_connected(&self) -> bool;
     fn set_vibration(&self, intensity: f32) -> DeviceFuture<'_>;
     fn stop(&self) -> DeviceFuture<'_>;
+    /// Renew unchanged positive output before the device's finite command expires.
+    fn refresh_interval(&self) -> Option<std::time::Duration> {
+        None
+    }
+    /// Backends may round DOWN to their actual command resolution.
+    fn quantize(&self, intensity: f32) -> f32 {
+        (unit(intensity) * 100.0).floor() / 100.0
+    }
+    /// Changes even if a disconnect/reconnect completes between worker samples.
+    fn connection_epoch(&self) -> u64 {
+        0
+    }
+    /// Physical backends require explicit Resume after every new connection.
+    fn requires_resume_on_connect(&self) -> bool {
+        false
+    }
 }
 
 /// In-memory device for Demo and tests. It never discovers or commands real toys.

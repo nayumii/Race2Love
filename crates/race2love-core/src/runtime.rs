@@ -25,6 +25,13 @@ use crate::{
 pub struct Controls {
     pub source_enabled: bool,
     pub emergency_stopped: bool,
+    pub test_pulse: Option<TestPulse>,
+    pub resume_epoch: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TestPulse {
+    pub until: Instant,
 }
 
 impl Default for Controls {
@@ -32,6 +39,8 @@ impl Default for Controls {
         Self {
             source_enabled: true,
             emergency_stopped: false,
+            test_pulse: None,
+            resume_epoch: 0,
         }
     }
 }
@@ -101,6 +110,7 @@ pub struct RuntimeControl {
     telemetry: watch::Receiver<TelemetrySnapshot>,
     effects: watch::Receiver<EffectSnapshot>,
     device: watch::Receiver<DeviceSnapshot>,
+    selected_device: watch::Sender<Arc<dyn HapticDevice>>,
 }
 
 impl RuntimeControl {
@@ -118,17 +128,44 @@ impl RuntimeControl {
         Ok(())
     }
     pub fn set_source_enabled(&self, enabled: bool) {
-        self.controls
-            .send_modify(|controls| controls.source_enabled = enabled);
+        self.controls.send_modify(|controls| {
+            controls.source_enabled = enabled;
+            controls.test_pulse = None;
+        });
     }
     /// Latched until an explicit resume; settings changes cannot undo it.
     pub fn emergency_stop(&self) {
-        self.controls
-            .send_modify(|controls| controls.emergency_stopped = true);
+        self.controls.send_modify(|controls| {
+            controls.emergency_stopped = true;
+            controls.test_pulse = None;
+        });
     }
     pub fn resume(&self) {
-        self.controls
-            .send_modify(|controls| controls.emergency_stopped = false);
+        self.controls.send_modify(|controls| {
+            controls.emergency_stopped = false;
+            controls.test_pulse = None;
+            controls.resume_epoch = controls.resume_epoch.wrapping_add(1);
+        });
+    }
+    /// Latest selection replaces old requests; the output worker stops the old device.
+    pub fn select_device(&self, device: Arc<dyn HapticDevice>) {
+        self.emergency_stop();
+        self.selected_device.send_replace(device);
+    }
+    /// Deliberate manual output independent of game telemetry. Demo stays paused
+    /// after the pulse; emergency stop must be explicitly resumed beforehand.
+    pub fn test_vibration(&self) -> bool {
+        let mut accepted = false;
+        self.controls.send_modify(|controls| {
+            if !controls.emergency_stopped {
+                controls.source_enabled = false;
+                controls.test_pulse = Some(TestPulse {
+                    until: Instant::now() + Duration::from_secs(1),
+                });
+                accepted = true;
+            }
+        });
+        accepted
     }
     pub fn request_shutdown(&self) {
         self.emergency_stop();
@@ -172,6 +209,7 @@ impl RaceRuntime {
             intensity: 0.0,
             error: None,
         });
+        let (selected_device_tx, selected_device_rx) = watch::channel(device.clone());
         let tasks = vec![
             tokio::spawn(telemetry_task(
                 source,
@@ -195,6 +233,8 @@ impl RaceRuntime {
                 config_rx,
                 controls_rx,
                 shutdown_rx,
+                selected_device_rx,
+                controls_tx.clone(),
             )),
         ];
         Ok(Self {
@@ -205,6 +245,7 @@ impl RaceRuntime {
                 telemetry: telemetry_rx,
                 effects: effects_rx,
                 device: device_rx,
+                selected_device: selected_device_tx,
             },
             tasks,
         })
@@ -415,21 +456,24 @@ async fn effects_task(
 /// Stops bypass both duplicate suppression and the positive-output rate limit.
 #[derive(Default)]
 pub struct OutputGate {
-    last_step: Option<u8>,
+    last_value: Option<u32>,
 }
 
 impl OutputGate {
     pub fn next(&mut self, intensity: f32) -> Option<f32> {
         // Round down so quantization can never exceed an intensity ceiling.
-        let step = (unit(intensity) * 100.0).floor() as u8;
-        if self.last_step == Some(step) {
+        self.next_quantized((unit(intensity) * 100.0).floor() / 100.0)
+    }
+    fn next_quantized(&mut self, intensity: f32) -> Option<f32> {
+        let value = unit(intensity);
+        if self.last_value == Some(value.to_bits()) {
             return None;
         }
-        self.last_step = Some(step);
-        Some(f32::from(step) / 100.0)
+        self.last_value = Some(value.to_bits());
+        Some(value)
     }
     pub fn reset(&mut self) {
-        self.last_step = None;
+        self.last_value = None;
     }
 }
 
@@ -445,18 +489,22 @@ async fn timed_stop(
 // Channel arguments express task inputs directly, avoiding shared mutable state.
 #[allow(clippy::too_many_arguments)]
 async fn output_task(
-    device: Arc<dyn HapticDevice>,
+    mut device: Arc<dyn HapticDevice>,
     mut effects: watch::Receiver<EffectSnapshot>,
     telemetry: watch::Receiver<TelemetrySnapshot>,
     state: watch::Sender<DeviceSnapshot>,
     mut config: watch::Receiver<Arc<Config>>,
     mut controls: watch::Receiver<Controls>,
     mut shutdown: watch::Receiver<bool>,
+    mut selected_device: watch::Receiver<Arc<dyn HapticDevice>>,
+    controls_tx: watch::Sender<Controls>,
 ) {
     let mut clock = ticker(config.borrow().output.update_hz);
     let mut gate = OutputGate::default();
     let mut snapshot = state.borrow().clone();
     let mut was_connected = false;
+    let mut device_epoch = device.connection_epoch();
+    let mut resume_epoch = controls.borrow().resume_epoch;
     let mut last_request = None;
     // A communication failure latches output until an explicit Stop + Resume.
     let mut fault_latched = false;
@@ -472,8 +520,17 @@ async fn output_task(
             _ = shutdown.changed() => break,
             result = controls.changed() => {
                 if result.is_err() { break; }
-                if controls.borrow().emergency_stopped { fault_latched = false; gate.reset(); }
+                let latest = *controls.borrow();
+                // A deliberate Stop must retry once even if zero was already
+                // consumed after a fault. Timers cannot trigger that retry.
+                if latest.emergency_stopped { gate.reset(); }
+                if latest.resume_epoch != resume_epoch {
+                    resume_epoch = latest.resume_epoch;
+                    fault_latched = false;
+                    gate.reset();
+                }
             }
+            result = selected_device.changed() => { if result.is_err() { break; } }
             result = config.changed() => {
                 if result.is_err() { break; }
                 clock = ticker(config.borrow().output.update_hz);
@@ -485,15 +542,31 @@ async fn output_task(
             break;
         }
         let now = Instant::now();
-        let config = config.borrow().clone();
+        let settings = config.borrow().clone();
         let latest_controls = *controls.borrow();
         let effect = *effects.borrow();
         let sample = telemetry.borrow().clone();
-        let deadline = Duration::from_millis(config.output.telemetry_timeout_ms);
-        let request_timeout = Duration::from_millis(config.lovense.request_timeout_ms);
+        let deadline = Duration::from_millis(settings.output.telemetry_timeout_ms);
+        let request_timeout = Duration::from_millis(settings.lovense.request_timeout_ms);
+        let selected = selected_device.borrow().clone();
+        if !Arc::ptr_eq(&selected, &device) {
+            if let Err(error) = timed_stop(device.as_ref(), request_timeout).await {
+                tracing::warn!(%error, "Previous device stop failed during switch");
+            }
+            device = selected;
+            device_epoch = device.connection_epoch();
+            was_connected = false;
+            gate.reset();
+            last_request = None;
+            fault_latched = false;
+            snapshot.name = device.name().into();
+            snapshot.error = None;
+            snapshot.intensity = 0.0;
+        }
         let connected = device.is_connected();
         snapshot.connected = connected;
-        if connected != was_connected {
+        let epoch = device.connection_epoch();
+        if connected != was_connected || epoch != device_epoch {
             tracing::info!(
                 connected,
                 device = device.name(),
@@ -505,15 +578,24 @@ async fn output_task(
                 fault_latched = true;
             }
             snapshot.intensity = 0.0;
+            if device.requires_resume_on_connect() {
+                controls_tx.send_modify(|control| {
+                    control.emergency_stopped = true;
+                    control.test_pulse = None;
+                });
+            }
             gate.reset();
             was_connected = connected;
+            device_epoch = epoch;
             // Give reconnect a zero-output cycle before allowing fresh effects.
             state.send_replace(snapshot.clone());
             continue;
         }
-        let safe = connected
-            && !fault_latched
-            && !latest_controls.emergency_stopped
+        let common_safe = connected && !fault_latched && !latest_controls.emergency_stopped;
+        let testing = latest_controls
+            .test_pulse
+            .is_some_and(|pulse| now < pulse.until);
+        let safe = common_safe
             && latest_controls.source_enabled
             && sample.connected
             && telemetry_is_fresh(sample.frame.as_ref(), now, deadline)
@@ -521,23 +603,46 @@ async fn output_task(
                 .checked_duration_since(effect.heartbeat)
                 .is_some_and(|age| age < deadline)
             && effect.reason == StopReason::Running;
-        let desired = if safe {
+        let desired = if common_safe && testing {
+            scale_output(
+                0.4,
+                settings.output.global_intensity,
+                settings.output.max_intensity,
+            )
+        } else if safe {
             unit(effect.intensity)
-                .min(unit(config.output.global_intensity))
-                .min(unit(config.output.max_intensity))
+                .min(unit(settings.output.global_intensity))
+                .min(unit(settings.output.max_intensity))
         } else {
             0.0
         };
-        let period = Duration::from_secs_f64(1.0 / f64::from(config.output.update_hz));
+        let period = Duration::from_secs_f64(1.0 / f64::from(settings.output.update_hz));
         if desired > 0.0
             && last_request.is_some_and(|last| now.saturating_duration_since(last) < period)
         {
             continue;
         }
-        if let Some(intensity) = gate.next(desired) {
+        let quantized = unit(device.quantize(desired)).min(desired);
+        let renewal_due = quantized > 0.0
+            && device.refresh_interval().is_some_and(|renewal| {
+                last_request.is_some_and(|last| now.saturating_duration_since(last) >= renewal)
+            });
+        if renewal_due {
+            gate.reset();
+        }
+        if let Some(intensity) = gate.next_quantized(quantized) {
             let (applied, result) = if intensity == 0.0 {
                 (0.0, timed_stop(device.as_ref(), request_timeout).await)
             } else {
+                let safety_deadline = if testing {
+                    latest_controls.test_pulse.unwrap().until
+                } else {
+                    let telemetry_deadline = sample
+                        .frame
+                        .as_ref()
+                        .map_or(now, |frame| frame.timestamp + deadline);
+                    telemetry_deadline.min(effect.heartbeat + deadline)
+                };
                 // Cancel an in-flight command on stop/shutdown, then send stop.
                 tokio::select! {
                     biased;
@@ -548,6 +653,25 @@ async fn output_task(
                         snapshot.intensity = 0.0;
                         (0.0, result)
                     }
+                    _ = selected_device.changed() => {
+                        gate.reset();
+                        (0.0, timed_stop(device.as_ref(), request_timeout).await)
+                    }
+                    _ = config.changed() => {
+                        gate.reset();
+                        clock = ticker(config.borrow().output.update_hz);
+                        (0.0, timed_stop(device.as_ref(), request_timeout).await)
+                    }
+                    _ = tokio::time::sleep_until(tokio::time::Instant::from_std(safety_deadline)) => {
+                        gate.reset();
+                        (0.0, timed_stop(device.as_ref(), request_timeout).await)
+                    }
+                    _ = async {
+                        let _ = effects.wait_for(|effect| effect.reason != StopReason::Running || effect.intensity == 0.0).await;
+                    }, if !testing => {
+                        gate.reset();
+                        (0.0, timed_stop(device.as_ref(), request_timeout).await)
+                    }
                     result = timeout(request_timeout, device.set_vibration(intensity)) => {
                         (intensity, result.map_err(|_| DeviceError::Timeout).and_then(|result| result))
                     }
@@ -557,7 +681,7 @@ async fn output_task(
             match result {
                 Ok(()) => {
                     // Control changes may have canceled this command in-flight.
-                    if controls.borrow().emergency_stopped || !controls.borrow().source_enabled {
+                    if controls.borrow().emergency_stopped {
                         snapshot.intensity = 0.0;
                     } else {
                         snapshot.intensity = applied;
@@ -710,6 +834,28 @@ mod tests {
         runtime.shutdown().await;
     }
 
+    #[tokio::test]
+    async fn selecting_a_backend_stops_old_output_and_requires_explicit_resume() {
+        let first = Arc::new(MockDevice::default());
+        let second = Arc::new(MockDevice::default());
+        let runtime = RaceRuntime::spawn(
+            Box::new(DemoSource::default()),
+            first.clone(),
+            Config::default(),
+        )
+        .unwrap();
+        wait_for(|| first.intensity() > 0.0).await;
+        runtime.control.select_device(second.clone());
+        wait_for(|| first.intensity() == 0.0 && second.stop_count() > 0).await;
+        assert!(runtime.control.snapshot().controls.emergency_stopped);
+        assert_eq!(second.intensity(), 0.0);
+        runtime.control.resume();
+        wait_for(|| second.intensity() > 0.0).await;
+        assert_eq!(first.intensity(), 0.0);
+        runtime.shutdown().await;
+        assert_eq!(second.intensity(), 0.0);
+    }
+
     struct FailingDevice {
         commands: AtomicU64,
         stops: AtomicU64,
@@ -852,6 +998,7 @@ mod tests {
             intensity: 0.0,
             error: None,
         });
+        let (_selection_tx, selection_rx) = watch::channel(device.clone() as Arc<dyn HapticDevice>);
         let task = tokio::spawn(output_task(
             device.clone(),
             effects_rx,
@@ -860,6 +1007,8 @@ mod tests {
             config_rx,
             controls_rx,
             shutdown_rx,
+            selection_rx,
+            controls_tx.clone(),
         ));
         wait_for(|| device.intensity() > 0.0).await;
         let telemetry_worker = tokio::spawn(async move {

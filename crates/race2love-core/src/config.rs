@@ -55,6 +55,7 @@ pub struct LovenseConfig {
     pub host: String,
     /// Unknown until Remote/Game Mode reports its port; never assume one.
     pub port: Option<u16>,
+    pub protocol: LocalProtocol,
     pub automatic_reconnect: bool,
     pub request_timeout_ms: u64,
 }
@@ -64,8 +65,27 @@ impl Default for LovenseConfig {
         Self {
             host: "127.0.0.1".into(),
             port: None,
+            protocol: LocalProtocol::Http,
             automatic_reconnect: true,
             request_timeout_ms: 1_000,
+        }
+    }
+}
+
+/// Transport for a manually configured Remote endpoint. HTTPS verifies certificates.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LocalProtocol {
+    #[default]
+    Http,
+    Https,
+}
+
+impl LocalProtocol {
+    pub fn scheme(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Https => "https",
         }
     }
 }
