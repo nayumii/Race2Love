@@ -9,12 +9,15 @@ use race2love_core::{
     runtime::RaceRuntime,
     telemetry::DemoSource,
 };
+use race2love_lovense::LovenseService;
 use tracing_subscriber::EnvFilter;
 
 fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            EnvFilter::new("race2love=info,race2love_core=info,race2love_gui=info")
+            EnvFilter::new(
+                "race2love=info,race2love_core=info,race2love_gui=info,race2love_lovense=info",
+            )
         }))
         .try_init()
         .map_err(|error| -> Box<dyn Error> { error })?;
@@ -57,9 +60,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
     let executor = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
-        .enable_time()
+        .enable_all()
         .build()?;
     let device = Arc::new(MockDevice::default());
+    let lovense = {
+        let _entered = executor.enter();
+        LovenseService::spawn()
+    };
     let runtime = {
         let _entered = executor.enter();
         RaceRuntime::spawn(
@@ -78,8 +85,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         #[cfg(feature = "gui")]
         {
-            race2love_gui::run(runtime.control.clone(), config, path, message)
-                .map_err(|error| format!("Could not open the native window: {error}"))
+            race2love_gui::run(
+                runtime.control.clone(),
+                config,
+                path,
+                message,
+                lovense.control.clone(),
+                lovense.device.clone(),
+                device.clone(),
+            )
+            .map_err(|error| format!("Could not open the native window: {error}"))
         }
         #[cfg(not(feature = "gui"))]
         {
@@ -88,6 +103,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
     executor.block_on(runtime.shutdown());
+    executor.block_on(lovense.shutdown());
     tracing::info!(output = device.intensity(), "Race2Love shutdown complete");
     result.map_err(Into::into)
 }

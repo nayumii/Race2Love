@@ -1,15 +1,17 @@
 //! Native desktop views. Render code only reads channel snapshots and sends
 //! controls; telemetry reads and device communication stay in core workers.
 
-use std::{path::PathBuf, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use eframe::egui;
 use race2love_core::{
-    config::Config,
+    config::{Config, LocalProtocol},
+    devices::HapticDevice,
     effects::ResponseCurve,
     runtime::{RuntimeControl, RuntimeSnapshot, StopReason},
     unit,
 };
+use race2love_lovense::{ConnectionState, LovenseControl};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -26,6 +28,8 @@ pub struct Race2LoveApp {
     dirty: bool,
     message: Option<String>,
     config_error: Option<String>,
+    lovense: Option<LovenseControl>,
+    devices: Option<(Arc<dyn HapticDevice>, Arc<dyn HapticDevice>)>,
 }
 
 impl Race2LoveApp {
@@ -43,7 +47,20 @@ impl Race2LoveApp {
             dirty: false,
             message: startup_message,
             config_error: None,
+            lovense: None,
+            devices: None,
         }
+    }
+
+    pub fn with_lovense(
+        mut self,
+        control: LovenseControl,
+        device: Arc<dyn HapticDevice>,
+        demo: Arc<dyn HapticDevice>,
+    ) -> Self {
+        self.lovense = Some(control);
+        self.devices = Some((device, demo));
+        self
     }
 
     fn save_settings(&mut self) {
@@ -66,7 +83,7 @@ impl Race2LoveApp {
     fn header(&mut self, ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
         ui.horizontal_wrapped(|ui| {
             ui.heading("Race2Love");
-            ui.label("Phase 1 · Demo");
+            ui.label("Phase 2 · Demo telemetry");
             ui.separator();
             for (page, title) in [
                 (Page::Dashboard, "Dashboard"),
@@ -92,7 +109,17 @@ impl Race2LoveApp {
             if snapshot.controls.emergency_stopped && ui.button("Resume output").clicked() {
                 self.control.resume();
             }
-            ui.label(snapshot.effects.reason.label());
+            ui.label(
+                if snapshot
+                    .controls
+                    .test_pulse
+                    .is_some_and(|pulse| std::time::Instant::now() < pulse.until)
+                {
+                    "Testing vibration"
+                } else {
+                    snapshot.effects.reason.label()
+                },
+            );
         });
         ui.separator();
     }
@@ -107,9 +134,8 @@ impl Race2LoveApp {
                 snapshot.telemetry.connected,
                 &format!("{} telemetry", snapshot.telemetry.source_name),
             );
-            indicator(ui, snapshot.device.connected, "Mock device");
+            indicator(ui, snapshot.device.connected, &snapshot.device.name);
             indicator(ui, false, "LMU · Phase 3 / 4");
-            indicator(ui, false, "Lovense · Phase 2");
         });
         let mut enabled = snapshot.controls.source_enabled;
         if ui.checkbox(&mut enabled, "Run Demo telemetry").changed() {
@@ -165,8 +191,16 @@ impl Race2LoveApp {
         ui.add_space(12.0);
         meter(ui, "Mixed effects", snapshot.effects.mixed);
         meter(ui, "Scaled target", snapshot.effects.intensity);
-        meter(ui, "Applied mock output", snapshot.device.intensity);
-        ui.small("Demo output is an in-memory value. It does not command a physical device.");
+        meter(ui, "Applied output", snapshot.device.intensity);
+        if self
+            .devices
+            .as_ref()
+            .is_some_and(|(physical, _)| physical.name() == snapshot.device.name)
+        {
+            ui.small("Lovense output controls the selected toy. Commands expire without renewal.");
+        } else {
+            ui.small("Demo output is an in-memory value. It does not command a physical device.");
+        }
         ui.separator();
         percentage_slider(
             ui,
@@ -276,11 +310,27 @@ impl Race2LoveApp {
         ui.small("Valid changes apply immediately. Stop remains latched until Resume output.");
     }
 
-    fn settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Lovense · Phase 2");
-        ui.label(
-            "Connection preferences can be saved now. The local API adapter is the next phase.",
-        );
+    fn settings(&mut self, ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
+        ui.heading("Lovense Remote / Game Mode");
+        ui.label("Enable LAN in Remote, then enter its address and port. Connect discovers toys.");
+        ui.horizontal(|ui| {
+            ui.label("Protocol");
+            ui.selectable_value(
+                &mut self.config.lovense.protocol,
+                LocalProtocol::Http,
+                "HTTP",
+            );
+            ui.selectable_value(
+                &mut self.config.lovense.protocol,
+                LocalProtocol::Https,
+                "HTTPS",
+            );
+            if ui.button("Local HTTP preset").clicked() {
+                self.config.lovense.host = "127.0.0.1".into();
+                self.config.lovense.port = Some(20010);
+                self.config.lovense.protocol = LocalProtocol::Http;
+            }
+        });
         ui.horizontal(|ui| {
             ui.label("Remote host / IP");
             ui.add(egui::TextEdit::singleline(&mut self.config.lovense.host).char_limit(253));
@@ -294,21 +344,99 @@ impl Race2LoveApp {
             {
                 self.config.lovense.port = (port != 0).then_some(port);
             }
-            ui.small("0 = unset; use the port shown by Remote");
+            ui.small("0 = unset; use Remote's port");
         });
         ui.checkbox(
             &mut self.config.lovense.automatic_reconnect,
-            "Reconnect automatically (Phase 2)",
+            "Reconnect automatically (up to 5 attempts)",
         );
         ui.add(
             egui::Slider::new(&mut self.config.lovense.request_timeout_ms, 100..=5_000)
                 .text("API timeout (ms)"),
         );
-        ui.add_enabled(
-            false,
-            egui::Button::new("Discover / Connect / Test vibration · Phase 2"),
-        );
-        ui.label("Detected toys: none · mock device active");
+        if let (Some(lovense), Some((device, demo))) = (&self.lovense, &self.devices) {
+            let remote = lovense.snapshot();
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Connect / Discover toys").clicked()
+                    && self.control.update_config(self.config.clone()).is_ok()
+                {
+                    self.control.select_device(device.clone());
+                    lovense.connect(self.config.lovense.clone());
+                }
+                if ui.button("Disconnect / Use Demo output").clicked() {
+                    self.control.emergency_stop();
+                    lovense.disconnect();
+                    self.control.select_device(demo.clone());
+                }
+                if ui
+                    .add_enabled(
+                        remote.selected_ready
+                            && snapshot.device.connected
+                            && snapshot.device.name == device.name()
+                            && !snapshot.controls.emergency_stopped,
+                        egui::Button::new("Test vibration · 1 second"),
+                    )
+                    .clicked()
+                {
+                    self.control.test_vibration();
+                }
+            });
+            indicator(
+                ui,
+                remote.state == ConnectionState::Connected,
+                remote.state.label(),
+            );
+            if let Some(endpoint) = &remote.endpoint {
+                ui.small(format!("Active endpoint: {endpoint}"));
+            }
+            ui.small("Connect and toy changes stop output. Pause Demo, Resume output, then Test. Test leaves Demo paused.");
+            ui.small("Test strength: 40% × global intensity, capped by maximum. Resume with Demo running enables racing effects.");
+            if let Some(error) = &remote.error {
+                ui.colored_label(egui::Color32::LIGHT_RED, error);
+            }
+            ui.label("Detected toys (select one explicitly):");
+            for toy in &remote.toys {
+                ui.horizontal_wrapped(|ui| {
+                    let allowed = toy.connected && toy.vibration != Some(false);
+                    if ui
+                        .add_enabled(
+                            allowed,
+                            egui::Button::selectable(
+                                remote.selected.as_ref() == Some(&toy.id),
+                                toy.label(),
+                            ),
+                        )
+                        .clicked()
+                    {
+                        self.control.select_device(device.clone());
+                        lovense.select_toy(toy.id.clone());
+                    }
+                    ui.small(if toy.connected {
+                        "Connected"
+                    } else {
+                        "Disconnected"
+                    });
+                    if let Some(battery) = toy.battery {
+                        ui.small(format!("Battery {battery}%"));
+                    }
+                    match toy.vibration {
+                        Some(false) => {
+                            ui.small("Vibration unsupported");
+                        }
+                        None => {
+                            ui.small("Capabilities unavailable; verify vibration before testing");
+                        }
+                        _ => {}
+                    }
+                });
+            }
+            if remote.toys.is_empty() {
+                ui.small("No toys detected. Pair a toy in Remote and click Connect.");
+            }
+        } else {
+            ui.label("Lovense connection worker is unavailable in this view.");
+        }
+        ui.small("HTTPS requires a valid certificate hostname. Address changes apply on Connect; no cloud or LAN scanning.");
         ui.separator();
         ui.heading("Application");
         ui.checkbox(
@@ -362,7 +490,7 @@ impl eframe::App for Race2LoveApp {
                 match self.page {
                     Page::Dashboard => self.dashboard(ui, &snapshot),
                     Page::Effects => self.effects(ui),
-                    Page::Settings => self.settings(ui),
+                    Page::Settings => self.settings(ui, &snapshot),
                 }
                 if let Some(error) = &self.config_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
@@ -378,12 +506,20 @@ impl eframe::App for Race2LoveApp {
         });
         if self.config != before {
             self.dirty = true;
+            if self.config.lovense != before.lovense && self.lovense.is_some() {
+                self.control.emergency_stop();
+            }
             match self.control.update_config(self.config.clone()) {
                 Ok(()) => self.config_error = None,
                 Err(error) => self.config_error = Some(error.to_string()),
             }
         }
-        let rate = if snapshot.effects.reason == StopReason::Running {
+        let rate = if snapshot.effects.reason == StopReason::Running
+            || snapshot
+                .controls
+                .test_pulse
+                .is_some_and(|pulse| std::time::Instant::now() < pulse.until)
+        {
             self.config.ui.refresh_hz.max(1)
         } else {
             2
@@ -451,6 +587,9 @@ pub fn run(
     config: Config,
     path: Option<PathBuf>,
     startup_message: Option<String>,
+    lovense: LovenseControl,
+    device: Arc<dyn HapticDevice>,
+    demo: Arc<dyn HapticDevice>,
 ) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -470,12 +609,10 @@ pub fn run(
                     .egui_ctx
                     .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
             }
-            Ok(Box::new(Race2LoveApp::new(
-                control,
-                config,
-                path,
-                startup_message,
-            )))
+            Ok(Box::new(
+                Race2LoveApp::new(control, config, path, startup_message)
+                    .with_lovense(lovense, device, demo),
+            ))
         }),
     )
 }
@@ -508,7 +645,7 @@ mod tests {
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(880.0, 720.0),
+                        egui::vec2(880.0, 1400.0),
                     )),
                     time: Some(self.time),
                     events,
@@ -628,5 +765,39 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
         assert_eq!(device.intensity(), 0.0);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn gui_connect_reports_missing_port_and_disconnect_returns_to_demo_safely() {
+        let demo = Arc::new(MockDevice::default());
+        let runtime = RaceRuntime::spawn(
+            Box::new(DemoSource::default()),
+            demo.clone(),
+            Config::default(),
+        )
+        .unwrap();
+        let service = race2love_lovense::LovenseService::spawn();
+        let mut app = Race2LoveApp::new(runtime.control.clone(), Config::default(), None, None)
+            .with_lovense(
+                service.control.clone(),
+                service.device.clone(),
+                demo.clone(),
+            );
+        let mut ui = TestUi::new();
+        wait_for(|| demo.intensity() > 0.0).await;
+        ui.click(&mut app, "Devices / Settings");
+        ui.click(&mut app, "Connect / Discover toys");
+        wait_for(|| service.control.snapshot().state == ConnectionState::Exhausted).await;
+        assert!(service.control.snapshot().error.unwrap().contains("port"));
+        assert!(runtime.control.snapshot().controls.emergency_stopped);
+        wait_for(|| demo.intensity() == 0.0).await;
+        ui.click(&mut app, "Disconnect / Use Demo output");
+        wait_for(|| runtime.control.snapshot().device.name == demo.name()).await;
+        assert_eq!(demo.intensity(), 0.0);
+        ui.click(&mut app, "Resume output");
+        wait_for(|| demo.intensity() > 0.0).await;
+        runtime.shutdown().await;
+        service.shutdown().await;
+        assert_eq!(demo.intensity(), 0.0);
     }
 }

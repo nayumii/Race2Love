@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/race2love-core", "crates/race2love-gui"]
+members = ["crates/race2love-core", "crates/race2love-gui", "crates/race2love-lovense"]
 resolver = "2"
 
 [workspace.package]
@@ -11,9 +11,15 @@ publish = false
 [workspace.dependencies]
 race2love-core = { path = "crates/race2love-core" }
 race2love-gui = { path = "crates/race2love-gui" }
+race2love-lovense = { path = "crates/race2love-lovense" }
 # 0.34 supports Rust 1.92; 0.36 requires 1.95. Glow avoids the larger wgpu stack.
 eframe = { version = "0.34.3", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Current reqwest, HTTP/1 + JSON + verified TLS only; no HTTP/2/compression/proxies.
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls-no-provider"] }
+# Select ring rather than the larger default AWS-LC crypto build.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 toml = "1.1"
@@ -34,6 +40,7 @@ gui = ["dep:race2love-gui"]
 
 [dependencies]
 race2love-core.workspace = true
+race2love-lovense.workspace = true
 race2love-gui = { workspace = true, optional = true }
 tokio.workspace = true
 tracing.workspace = true
