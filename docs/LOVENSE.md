@@ -39,11 +39,11 @@ until explicit Resume. A reconnect never replays a cached positive command.
 | Headers | JSON content type; `X-platform: Race2Love` |
 | Discovery | `GetToys`; typed envelope and toy map |
 | Toy responses | Object or JSON-encoded object; numeric/string status and battery |
-| Positive output | Changing/fractional output uses `Pattern`, `apiVer: 2`, explicit `toy`; stable integer output uses targeted `Function/Vibrate` |
+| Positive output | Direct `Function/Vibrate` by default; experimental modes use `Pattern`, `apiVer: 2`, explicit `toy`, preceded by targeted Function cancellation |
 | Conversion | Keep native targets as `f32` 0–20; emit bounded integer levels, optionally with temporal dithering |
 | Lease | `timeSec: 2`; unchanged positive output renewed every 500 ms |
 | Stop | Targeted `Function` with `action: Stop`, `timeSec: 0` |
-| Request cap | Core output rate, default 25 Hz; sequential positive commands |
+| Request cap | Core target submissions default 25 Hz; small Pattern changes wait at least 110 ms after acknowledgement; each Pattern batch uses two sequential POSTs |
 | Status polling | Every two seconds while connected; Stop preempts the wait |
 | Request timeout | Configurable 100–5000 ms, default 1000 ms |
 | Response limit | 64 KiB, including bodies without a Content-Length |
@@ -53,71 +53,82 @@ until explicit Resume. A reconnect never replays a cached positive command.
 
 ## Smoother output and comparison
 
-The default `lovense.output_mode = "pattern_dither"` retains fractions to 0.01 of
-a native level instead of truncating to one of 20 levels before the backend sees
-the target. Core telemetry/effects remain normalized `0..=1`; the native `f32`
-target and shaping state live only in `smoothing.rs`. No new task, channel or
-dependency is introduced. An optional device method forwards the existing
-absolute output ceiling; other backends retain their previous behavior.
+Direct Vibrate (`lovense.output_mode = "vibrate"`) is again the default. The owner
+reported both Pattern modes cycling from low to maximum intensity rather than
+tracking correctly. The original digital comparison did not model Remote's
+schedule replacement behavior and was insufficient to establish hardware support.
+Pattern modes remain **experimental**, with saved explicit choices preserved.
+Existing TOML files without an output mode now retain the original Vibrate behavior.
 
-Changing output uses `Pattern` with `rule: "V:1;F:v;S:110#"`, 19 explicitly
-listed integer strengths, an explicit toy ID, `apiVer: 2` and `timeSec: 2`.
-110 ms satisfies the API table's interval requirement (>100 ms), even though the
-same page shows a 100 ms example. The list covers the full two-second lease;
-Race2Love does not depend on undocumented looping or decimal wire strengths.
-Only vibration is requested. Stop remains the existing targeted Function/Stop.
+The corrected Pattern modes keep targets as `f32` 0–20, to 0.01 native level, rather
+than truncating before the backend sees them. Core telemetry/effects remain
+normalized `0..=1`; shaping state stays in `smoothing.rs`. No new task, queue or
+dependency is introduced. The device's earliest replacement deadline travels
+through the existing snapshot. The runtime samples normally and takes the latest
+current target when that deadline passes; it does not queue old intensity changes.
 
-For small target changes, shaping starts halfway from the current interpolated
-value to the new target, then settles over 60 ms. Fresh commands can replace a
-pattern immediately, within the existing configured output cap (25 Hz by default).
-There is no 110 ms request queue or wait. Startup, zero, and changes of at least
-two native levels bypass the ramp, keeping strong shift pulses responsive. A
-small isolated change can still await the next native pattern slot; software
-interpolation does not make the toy's physical levels continuous.
+Pattern uses `rule: "V:1;F:v;S:110#"`, 19 explicitly listed integer strengths,
+an explicit toy ID, `apiVer: 2` and `timeSec: 2`. 110 ms satisfies the API table's
+interval requirement (>100 ms), despite its 100 ms example. The list covers the
+two-second lease without relying on undocumented looping or decimal strengths.
 
-Error diffusion represents fractions with adjacent levels: 10.5 uses 10/11 slots.
-When a new target or lease renewal replaces a pattern, the error accumulator
-accounts only for elapsed slots, including partially played slots. It does not
-count future samples that the toy never played. Every sample stays at or below
-the **floor of the independent ceiling**. For example, a 53% ceiling forbids level
-11 even if the requested average is 10.5; the backend then uses level 10. A ceiling
-change is forwarded even when the target stays unchanged.
+**Replacement is now explicit.** Before each Pattern, the worker sends the existing
+targeted Function/Vibrate at the new first strength with `stopPrevious: 1`. This
+cancels older schedules using the documented Function contract, without inserting
+an extra zero-strength step. Pattern itself has no documented stopPrevious field.
+If installation fails, Stop also clears that positive prelude. A pair uses two
+HTTP requests, rather than assuming new Pattern commands cancel their predecessors.
 
-Identical targets/patterns are suppressed until a 500 ms lease renewal is needed.
-Stable integers use ordinary finite Vibrate commands; stable fractions use one
-locally executed pattern plus renewals. Stop, selection, disconnect, errors and
-shutdown reset shaping history. Unsupported Pattern responses (documented codes
-400/403) trigger one Stop + direct-Vibrate fallback per connection, shown in the
-UI. Malformed replies, invalid parameters (404) and network/HTTP errors fail
-closed rather than guessing compatibility. Reconnect permits a new Pattern try.
+Small changes wait at least one 110 ms slot after the previous Pattern's HTTP
+acknowledgement. The normal output tick can add up to one configured update period
+(default 40 ms). This replaces the previous strategy that could restart 110 ms
+Patterns every 40 ms. The deadline starts after acknowledgement, so a slow response
+cannot consume the slot budget. Lease renewal likewise starts after acknowledgement.
+Startup, Stop, zero and tighter ceilings bypass Pattern pacing. Changes of at least
+two native levels use **direct Vibrate** immediately at the normal configured rate,
+canceling old Patterns and retaining sharp feedback. A subsequent small change can
+return to Pattern. Small ramps still start halfway toward the target and settle
+over 60 ms in the scheduled samples.
 
-Devices / Settings offers three saved modes. Change mode, click Connect, reselect
-the toy, then Resume; all existing connection/Stop rules remain. Compare using
-the same effect settings and global intensity:
+Error diffusion represents fractional means with adjacent levels: 10.5 uses 10/11.
+Only actually elapsed samples contribute to the error accumulator. Every strength
+honors the **floor of the independent ceiling**: a 53% ceiling permits level 10 but
+forbids level 11 even with a mean target of 10.5. Ceiling changes are forwarded even
+when the mean target is unchanged. Stable integer output uses Function; stable
+fractions use Pattern. Duplicates are suppressed except for 500 ms lease renewals.
+Stop, disconnect, selection, errors and shutdown clear all shaping/cadence state.
+No deferred positive output can replay after Stop.
 
-| Mode | Two-second 10→13 ramp: signed mean error | Mean absolute error | Positive requests |
+Unsupported Pattern responses (documented codes 400/403) trigger one Stop + direct
+Vibrate fallback per connection, shown in the UI. Malformed replies, invalid
+parameters (404) and network/HTTP errors fail closed. Reconnect permits a new try.
+
+Devices / Settings offers all three saved modes. To apply a choice, click Connect,
+reselect the toy, then Resume. Start with Direct Vibrate. Compare the experimental
+modes only after the corrected build is confirmed on the actual Remote/toy.
+
+| Mode | Two-second 10→13 ramp: signed mean error | Mean absolute error | Positive HTTP requests |
 | --- | ---: | ---: | ---: |
-| Direct Vibrate (`vibrate`) | -0.516 levels | 0.516 levels | 6 |
-| Pattern smoothing (`pattern`) | -0.536 levels | 0.536 levels | 7 |
-| Pattern smoothing + dithering (`pattern_dither`, default) | -0.056 levels | 0.306 levels | 50 |
+| Direct Vibrate (`vibrate`, default) | -0.516 levels | 0.516 levels | 6 |
+| Pattern smoothing (`pattern`, experimental) | -0.611 levels | 0.611 levels | 13 |
+| Pattern smoothing + dithering (`pattern_dither`, experimental) | -0.176 levels | 0.328 levels | 35 |
 
-These are deterministic **digital output simulation** results with targets at
-25 Hz, output sampled at 5 ms, and no network/motor latency. They demonstrate
-reduced quantization bias, not measured physical smoothness. Dithering can send
-more requests during a ramp; it still obeys the existing 25 Hz cap, and stable
-output requires only renewals. Pattern alone does not improve level resolution.
-Run the comparison again with:
+These are **digital simulation** results, with targets checked every 40 ms, native
+levels sampled every 5 ms, and no network/motor latency. They include cadence and
+both POSTs in each Pattern batch. They do not establish perceived smoothness or
+Remote/firmware compatibility. Pattern alone cannot add device strength levels;
+dithering can feel like flutter. Small-change coalescing adds latency, so hardware
+feel remains the deciding comparison. Reproduce the numbers with:
 
 ```sh
 cargo test -p race2love-lovense compare_direct_pattern -- --nocapture
 ```
 
-Actual feel, flutter and latency depend on the toy/Remote and need a physical A/B
-comparison. `Acknowledged device target` is the input accepted by the backend,
-not motor readback; native rounding/ceilings can also lower its achievable average.
-Existing TOML files load without migration;
-the absent mode defaults to `pattern_dither`. Select `vibrate` for the previous
-output strategy.
+`Acknowledged device target` is the input accepted by the backend, not motor
+readback. Native rounding/ceilings can lower its achievable average. If either
+experimental mode still cycles or feels irregular, use `vibrate` and retain the
+working RPM/gear pipeline. Remote version, host platform and toy model are useful
+for further diagnosis; an OK API response alone does not prove schedule behavior.
 
 ## Stop and failure behavior
 

@@ -34,6 +34,7 @@ struct Reply {
 
 #[derive(Clone)]
 struct Record {
+    received: Instant,
     method: String,
     path: String,
     platform: String,
@@ -48,9 +49,11 @@ struct State {
     function: Reply,
     pattern: Reply,
     active: BTreeMap<String, ActiveOutput>,
+    pattern_overlaps: usize,
 }
 
 struct ActiveOutput {
+    pattern: bool,
     levels: Vec<u8>,
     started: Instant,
     until: Instant,
@@ -83,6 +86,7 @@ impl Default for State {
             function: Reply::default(),
             pattern: Reply::default(),
             active: BTreeMap::new(),
+            pattern_overlaps: 0,
         }
     }
 }
@@ -209,6 +213,7 @@ async fn serve(mut stream: TcpStream, shared: Arc<Mutex<State>>) {
     let body: Value = serde_json::from_slice(&bytes[header_end..header_end + length]).unwrap();
     let mut start = headers.lines().next().unwrap().split_whitespace();
     let record = Record {
+        received: Instant::now(),
         method: start.next().unwrap().into(),
         path: start.next().unwrap().into(),
         platform: header("x-platform").unwrap_or_default(),
@@ -272,9 +277,21 @@ async fn serve(mut stream: TcpStream, shared: Arc<Mutex<State>>) {
                     assert_eq!(lease, 2);
                     assert!(levels.iter().all(|level| *level <= 20));
                     let started = Instant::now();
+                    if pattern
+                        && state
+                            .active
+                            .get(&toy)
+                            .is_some_and(|old| old.pattern && old.until > started)
+                    {
+                        state.pattern_overlaps += 1;
+                    }
+                    if !pattern {
+                        assert_eq!(body["stopPrevious"], 1);
+                    }
                     state.active.insert(
                         toy,
                         ActiveOutput {
+                            pattern,
                             levels,
                             started,
                             until: started + Duration::from_secs(lease),
@@ -723,6 +740,88 @@ async fn rpm_shift_pipeline_applies_live_settings_and_clears_pulses_on_timeout()
 }
 
 #[tokio::test]
+async fn changing_patterns_respect_slot_cadence_cancel_previous_schedule_and_track_latest() {
+    for mode in [LovenseOutputMode::Pattern, LovenseOutputMode::PatternDither] {
+        let mut remote = FakeRemote::start().await;
+        remote.config.output_mode = mode;
+        let service = connect(&remote).await;
+        let (frames, input) = watch::channel(Some((5_000.0, 3)));
+        let mut config = Config::default();
+        config.effects.engine = EngineConfig {
+            start_ratio: 0.0,
+            end_ratio: 1.0,
+            min_intensity: 0.0,
+            max_intensity: 1.0,
+            curve: ResponseCurve::Linear,
+            ..EngineConfig::default()
+        };
+        config.effects.gear_shift.enabled = false;
+        config.output.global_intensity = 1.0;
+        config.output.max_intensity = 1.0;
+        let runtime = RaceRuntime::spawn(
+            Box::new(ControlledSource { input }),
+            service.device.clone(),
+            config,
+        )
+        .unwrap();
+        wait_for(|| runtime.control.snapshot().controls.emergency_stopped).await;
+        runtime.control.resume();
+        wait_for(|| remote.active("b") == 10).await;
+        for step in 1..=60 {
+            frames.send_replace(Some((5_000.0 + step as f32 * 25.0, 3)));
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let final_target_at = Instant::now();
+        wait_for(|| (runtime.control.snapshot().device.intensity - 0.65).abs() < 0.001).await;
+        assert!(
+            final_target_at.elapsed() < Duration::from_millis(220),
+            "the last small target must settle without waiting for lease renewal"
+        );
+        let patterns: Vec<_> = remote
+            .records()
+            .into_iter()
+            .filter(|r| r.body["command"] == "Pattern")
+            .collect();
+        assert!(patterns.len() >= 2, "exercise actual replacement");
+        assert_eq!(
+            remote.state.lock().unwrap().pattern_overlaps,
+            0,
+            "cancel the previous schedule explicitly; do not assume Pattern replaces it"
+        );
+        for pair in patterns.windows(2) {
+            assert!(
+                pair[1].received - pair[0].received >= Duration::from_millis(110),
+                "do not restart before the next Pattern slot"
+            );
+        }
+        let jumped_at = Instant::now();
+        frames.send_replace(Some((8_000.0, 3)));
+        wait_for(|| remote.active("b") == 16).await;
+        assert!(
+            jumped_at.elapsed() < Duration::from_millis(100),
+            "sharp feedback must bypass Pattern pacing"
+        );
+        assert_eq!(
+            remote.records().last().unwrap().body["action"],
+            "Vibrate:16"
+        );
+        let stopped_at = Instant::now();
+        runtime.control.emergency_stop();
+        wait_for(|| remote.active("b") == 0).await;
+        assert!(stopped_at.elapsed() < Duration::from_millis(100));
+        let count = remote.patterns();
+        tokio::time::sleep(Duration::from_millis(180)).await;
+        assert_eq!(
+            remote.patterns(),
+            count,
+            "no delayed target may replay after Stop"
+        );
+        runtime.shutdown().await;
+        service.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn fractional_patterns_are_targeted_deduplicated_and_expire_without_renewal() {
     let mut remote = FakeRemote::start().await;
     remote.config.output_mode = LovenseOutputMode::PatternDither;
@@ -810,6 +909,11 @@ async fn malformed_or_invalid_pattern_responses_fail_closed_without_compatibilit
         assert_eq!(remote.patterns(), 1);
         assert!(!service.control.snapshot().using_vibrate_fallback);
         assert!(!service.device.is_connected());
+        assert_eq!(
+            remote.active("b"),
+            0,
+            "a failed Pattern must stop its positive Function prelude"
+        );
         service.shutdown().await;
         assert_eq!(remote.active("b"), 0);
     }

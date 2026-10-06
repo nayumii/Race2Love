@@ -712,7 +712,10 @@ async fn output_task(
         };
         let period = Duration::from_secs_f64(1.0 / f64::from(settings.output.update_hz));
         if desired > 0.0
-            && last_request.is_some_and(|last| now.saturating_duration_since(last) < period)
+            && (last_request.is_some_and(|last| now.saturating_duration_since(last) < period)
+                || device
+                    .next_update_at(desired, ceiling)
+                    .is_some_and(|ready| now < ready))
         {
             continue;
         }
@@ -771,7 +774,10 @@ async fn output_task(
                     }
                 }
             };
-            last_request = Some(now);
+            // Start renewal timing after acknowledgement. Measuring from request
+            // start can ask a backend to renew just before its own deadline, get
+            // a deduplicated no-op, then postpone the real renewal another period.
+            last_request = Some(Instant::now());
             match result {
                 Ok(()) => {
                     // Control changes may have canceled this command in-flight.

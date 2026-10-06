@@ -1,4 +1,43 @@
-# Lovense output smoothing validation
+# Pattern cycling correction
+
+The owner reported both Pattern modes cycling from low to maximum intensity.
+The earlier digital comparison assumed instantaneous schedule replacement and
+does not establish reliable behavior on their Remote/toy. The precise firmware
+behavior remains unverified. Direct Vibrate is restored as the default; explicitly
+saved Pattern modes are preserved and labeled experimental.
+
+A loopback regression reproduced overlapping active Pattern schedules before
+the fix (four overlapping replacements in the plain Pattern ramp). The corrected
+backend first issues targeted Function/Vibrate with `stopPrevious: 1` at the new
+first strength, explicitly canceling old schedules. Pattern replacement now waits
+for one 110 ms slot after acknowledgement while the existing runtime keeps the
+latest target; no new task or queue is introduced. Sharp changes use direct
+Vibrate and bypass that delay, as do Stop, zero and tighter ceilings.
+
+The regression exercises both modes, increasing targets every 20 ms, requiring
+multiple actual replacements, at least 110 ms between Pattern receipts, zero
+overlapping schedules and the final latest target within 220 ms. It also checks
+a sharp increase within 100 ms, emergency Stop within 100 ms, and no replay. These
+are loopback limits, not measured hardware timings. Malformed/error installation
+checks now require stopping the positive Function prelude too.
+
+Changing renewal timing to acknowledgement exposed and fixed a core timing race:
+a renewal measured from request start could arrive before the backend's renewal
+deadline, be suppressed, then be recorded as renewed by the core. The existing
+direct Vibrate lease test failed in isolation before this correction and passes
+afterwards. Existing fault and safety behavior remains covered.
+
+Recorded 2026-10-06 with Rust/Cargo stable 1.94.1. All **74 Linux tests** pass
+(31 core, three GUI, 15 LMU, six Lovense unit tests and 19 fake Remote tests).
+All **69 Windows tests** also passed as MinGW executables under isolated Wine
+11.19. Formatting, Linux/Windows workspace/all-targets checks and Clippy with
+`-D warnings` passed. The corrected digital comparison includes
+cadence and both POSTs per Pattern: mean absolute errors are 0.516 (Direct Vibrate,
+six requests), 0.611 (Pattern, 13 requests) and 0.328 (Pattern/dithering, 35 requests).
+No physical device is commanded by these tests. Hardware cycling, perceived
+smoothness and latency must still be retested with the corrected executable.
+
+# Lovense output smoothing validation (superseded)
 
 Recorded 2026-10-06 using Rust/Cargo stable 1.94.1. Formatting and Linux/Windows
 GNU workspace/all-targets checks and Clippy with `-D warnings` passed. All **73

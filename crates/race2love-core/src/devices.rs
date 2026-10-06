@@ -39,6 +39,12 @@ pub trait HapticDevice: Send + Sync {
     fn refresh_interval(&self) -> Option<std::time::Duration> {
         None
     }
+    /// Earliest safe replacement of locally scheduled output. The runtime keeps
+    /// sampling and coalesces to the latest target until then; Stop bypasses it.
+    /// Adapters can return None for sharp changes or a tighter physical ceiling.
+    fn next_update_at(&self, _intensity: f32, _ceiling: f32) -> Option<std::time::Instant> {
+        None
+    }
     /// Backends may round DOWN to their command resolution. A backend that
     /// schedules fractional averages may retain finer target precision here.
     fn quantize(&self, intensity: f32) -> f32 {

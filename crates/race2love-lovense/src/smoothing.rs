@@ -15,6 +15,31 @@ pub(crate) const SAMPLES: usize = 19;
 const RAMP: Duration = Duration::from_millis(60);
 const FAST_CHANGE: f32 = 2.0;
 
+/// Cadence travels through the existing connection snapshot, without a mutex or
+/// another output task. Deadlines start after HTTP acknowledgement, conservatively
+/// allowing a full native slot even when Remote responds slowly.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Cadence {
+    target: f32,
+    maximum: u8,
+    ready_at: Instant,
+}
+
+impl Cadence {
+    pub fn next_update_at(self, intensity: f32, ceiling: f32) -> Option<Instant> {
+        let maximum = (unit(ceiling) * 20.0).floor();
+        let target = (unit(intensity) * 20.0).min(maximum);
+        if target == 0.0
+            || maximum < f32::from(self.maximum)
+            || (target - self.target).abs() >= FAST_CHANGE
+        {
+            None
+        } else {
+            Some(self.ready_at)
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Output {
     Vibrate(u8),
@@ -105,6 +130,16 @@ impl Smoother {
         *self = Self::default();
     }
 
+    pub fn acknowledge(&mut self, now: Instant) -> Option<Cadence> {
+        let playing = self.playing.as_mut()?;
+        playing.started = now;
+        matches!(playing.output, Output::Pattern(_)).then(|| Cadence {
+            target: self.ramp.unwrap().target,
+            maximum: playing.output.maximum(),
+            ready_at: now + INTERVAL,
+        })
+    }
+
     /// Core intensities stay normalized. Fractional 0..20 values exist only here.
     /// Every integer slot honors the FLOOR of the independent physical ceiling.
     pub fn prepare(
@@ -124,6 +159,9 @@ impl Smoother {
         let maximum = (unit(ceiling) * 20.0).floor();
         let target = (unit(intensity) * 20.0).min(maximum);
         let changed = self.ramp.is_some_and(|ramp| ramp.target != target);
+        let sharp = self
+            .ramp
+            .is_some_and(|ramp| (ramp.target - target).abs() >= FAST_CHANGE);
         if !changed
             && self.mode == Some(mode)
             && self.playing.as_ref().is_some_and(|playing| {
@@ -165,6 +203,7 @@ impl Smoother {
             ramp.from != target && now.saturating_duration_since(ramp.started) < RAMP;
         let pattern = mode != LovenseOutputMode::Vibrate
             && target > 0.0
+            && !sharp
             && (changed || fractional || interpolating);
         let mut ideals = [target; SAMPLES];
         let error = self
@@ -296,6 +335,16 @@ mod tests {
         let playing = smoother.playing.as_ref().unwrap();
         assert_eq!(playing.ideals[0], 10.5);
         assert_eq!(playing.ideals[1], 11.0);
+        let cadence = smoother
+            .acknowledge(start + Duration::from_millis(50))
+            .unwrap();
+        assert_eq!(
+            cadence.next_update_at(0.555, 1.0),
+            Some(start + Duration::from_millis(160))
+        );
+        assert!(cadence.next_update_at(0.8, 1.0).is_none());
+        assert!(cadence.next_update_at(0.555, 0.53).is_none());
+        assert!(cadence.next_update_at(0.0, 1.0).is_none());
         let output = smoother
             .prepare(
                 0.8,
@@ -304,7 +353,11 @@ mod tests {
                 start + Duration::from_millis(80),
             )
             .unwrap();
-        assert_eq!(output.level(Duration::ZERO), 16);
+        assert_eq!(
+            output,
+            Output::Vibrate(16),
+            "sharp effects cancel schedules with the working Function command"
+        );
         smoother.reset();
         assert_eq!(
             smoother.prepare(0.5, 1.0, LovenseOutputMode::PatternDither, start),
@@ -366,13 +419,24 @@ mod tests {
             let mut commands = 0;
             let mut bias = 0.0;
             let mut absolute_error = 0.0;
+            let mut cadence: Option<Cadence> = None;
             for milliseconds in (0..2_000).step_by(5) {
                 let now = start + Duration::from_millis(milliseconds);
                 let target = 10.0 + 3.0 * milliseconds as f32 / 2_000.0;
                 if milliseconds % 40 == 0
-                    && smoother.prepare(target / 20.0, 1.0, mode, now).is_some()
+                    && cadence
+                        .and_then(|cadence| cadence.next_update_at(target / 20.0, 1.0))
+                        .is_none_or(|ready| now >= ready)
+                    && let Some(output) = smoother.prepare(target / 20.0, 1.0, mode, now)
                 {
-                    commands += 1;
+                    // Each Pattern is preceded by one Function/Vibrate to
+                    // cancel previous schedules without inserting a zero.
+                    commands += if matches!(output, Output::Pattern(_)) {
+                        2
+                    } else {
+                        1
+                    };
+                    cadence = smoother.acknowledge(now);
                 }
                 let playing = smoother.playing.as_ref().unwrap();
                 let actual = f32::from(playing.output.level(now - playing.started));
@@ -393,7 +457,7 @@ mod tests {
             }
         }
         assert!(
-            absolute_errors[0] < absolute_errors[2],
+            absolute_errors[2] < absolute_errors[0],
             "dithering must reduce average quantization error versus direct Vibrate"
         );
     }

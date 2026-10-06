@@ -78,20 +78,20 @@ impl Default for LovenseConfig {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LovenseOutputMode {
+    #[default]
     Vibrate,
     Pattern,
-    #[default]
     PatternDither,
 }
 
 impl LovenseOutputMode {
-    pub const ALL: [Self; 3] = [Self::PatternDither, Self::Pattern, Self::Vibrate];
+    pub const ALL: [Self; 3] = [Self::Vibrate, Self::Pattern, Self::PatternDither];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Vibrate => "Direct Vibrate (previous)",
-            Self::Pattern => "Pattern smoothing",
-            Self::PatternDither => "Pattern smoothing + dithering",
+            Self::Pattern => "Pattern smoothing (experimental)",
+            Self::PatternDither => "Pattern smoothing + dithering (experimental)",
         }
     }
 }
@@ -352,10 +352,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn existing_configs_default_to_smoothing_and_all_output_modes_round_trip() {
+    fn existing_configs_keep_working_vibrate_default_and_all_output_modes_round_trip() {
         let old: Config =
             toml::from_str("version = 1\n[lovense]\nhost = '127.0.0.1'\nport = 20010\n").unwrap();
-        assert_eq!(old.lovense.output_mode, LovenseOutputMode::PatternDither);
+        assert_eq!(old.lovense.output_mode, LovenseOutputMode::Vibrate);
         for mode in LovenseOutputMode::ALL {
             let mut config = old.clone();
             config.lovense.output_mode = mode;

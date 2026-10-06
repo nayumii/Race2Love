@@ -52,7 +52,8 @@ settings/controls; config file saves are small explicit/exit writes.
 
 Defaults: source polling 60 Hz, envelope timer 60 Hz, output cap 25 Hz, GUI 30 Hz.
 Fresh telemetry/settings can wake effects before the next timer tick. Output
-positive requests still obey the configured cap. Timers skip missed ticks rather
+positive target submissions still obey the configured cap. A Pattern batch uses
+two sequential HTTP requests. Timers skip missed ticks rather
 than issuing catch-up bursts. Disabled/disconnected/waiting sources poll at 1 Hz; inactive
 effects and UI repaint timers use 2 Hz. Device status/watchdog checks continue
 independently from the GUI.
@@ -136,6 +137,15 @@ handled, avoiding both head-of-line blocking and discovery starvation. HTTP bodi
 are capped at 64 KiB; all requests have timeouts. No background requests occur
 until explicit Connect. Healthy discovery polls every two seconds; connection
 failure uses at most five retries at 1/2/4/8/16 seconds. Toy selection is transient.
+
+Direct Vibrate is the tested default; Pattern modes are experimental. A Pattern
+batch starts with targeted Function/Vibrate at its first level (`stopPrevious: 1`)
+to cancel previous schedules. An optional device `next_update_at` deadline lets
+the existing output task coalesce small changes until one 110 ms slot has elapsed
+after acknowledgement. It then reads the latest effect snapshot, with no new queue
+or task. Stop, zero, tighter ceilings and sharp changes bypass that deadline;
+sharp changes use direct Function/Vibrate. Renewal timing starts at acknowledgement
+so the core cannot consume a prematurely deduplicated renewal as a new lease.
 
 ## Simulator adapter and future modules
 

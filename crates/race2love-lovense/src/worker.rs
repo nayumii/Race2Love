@@ -11,7 +11,7 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 
-use crate::smoothing::{Output, Smoother};
+use crate::smoothing::{Cadence, Output, Smoother};
 use crate::{RENEWAL, RemoteClient, Toy, vibration_step};
 
 const POLL: Duration = Duration::from_secs(2);
@@ -51,6 +51,7 @@ pub struct LovenseSnapshot {
     pub error: Option<String>,
     pub output_mode: LovenseOutputMode,
     pub using_vibrate_fallback: bool,
+    cadence: Option<Cadence>,
 }
 
 #[derive(Clone, Default)]
@@ -143,6 +144,16 @@ impl HapticDevice for LovenseDevice {
     }
     fn refresh_interval(&self) -> Option<Duration> {
         Some(RENEWAL)
+    }
+    fn next_update_at(&self, intensity: f32, ceiling: f32) -> Option<std::time::Instant> {
+        let state = self.state.borrow();
+        if state.output_mode == LovenseOutputMode::Vibrate || state.using_vibrate_fallback {
+            None
+        } else {
+            state
+                .cadence
+                .and_then(|cadence| cadence.next_update_at(intensity, ceiling))
+        }
     }
     fn quantize(&self, intensity: f32) -> f32 {
         let state = self.state.borrow();
@@ -238,6 +249,7 @@ impl Worker {
     }
     fn invalidate(&mut self) {
         self.smoother.reset();
+        self.snapshot.cadence = None;
         self.snapshot.using_vibrate_fallback = false;
         self.snapshot.selected_ready = false;
         self.snapshot.epoch = self.snapshot.epoch.wrapping_add(1);
@@ -393,6 +405,7 @@ impl Worker {
                 let _ = command.reply.send(Ok(()));
                 return;
             };
+            let was_pattern = matches!(output, Output::Pattern(_));
             let request = async {
                 match output {
                     Output::Vibrate(level) => {
@@ -400,6 +413,10 @@ impl Worker {
                         Ok(true)
                     }
                     Output::Pattern(levels) => {
+                        // Pattern does not document stopPrevious. Use the existing
+                        // Function contract to cancel older schedules without a
+                        // zero-strength gap, before installing the new pattern.
+                        client.vibrate(&toy, f32::from(levels[0]) / 20.0).await?;
                         if client.pattern(&toy, &levels).await? {
                             Ok(true)
                         } else {
@@ -440,6 +457,12 @@ impl Worker {
                 );
                 self.publish();
             }
+            if was_pattern
+                && result.is_err()
+                && let Err(error) = client.stop(&toy).await
+            {
+                tracing::warn!(%error, "Stop after failed Pattern replacement failed; finite lease bounds output");
+            }
             result.map(|_| ())
         } else {
             self.smoother.reset();
@@ -448,6 +471,8 @@ impl Worker {
         if result.is_err() {
             self.smoother.reset();
         }
+        self.snapshot.cadence = self.smoother.acknowledge(Instant::now().into_std());
+        self.publish();
         if let Err(error) = &result
             && self.snapshot.state == ConnectionState::Connected
         {

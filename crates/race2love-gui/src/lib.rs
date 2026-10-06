@@ -403,6 +403,7 @@ impl Race2LoveApp {
                 }
             });
         ui.small("Compare modes with the same effects/intensity. Connect, reselect the toy and Resume to apply.");
+        ui.small("Direct Vibrate is the tested default. Pattern modes are experimental; switch back if they cycle or feel irregular.");
         if let (Some(lovense), Some((device, demo))) = (&self.lovense, &self.devices) {
             let remote = lovense.snapshot();
             if remote.using_vibrate_fallback {
@@ -793,7 +794,9 @@ mod tests {
         assert!(app.page == Page::Settings);
         ui.click(&mut app, "Show telemetry debug values on Dashboard");
         assert!(app.config.ui.show_debug);
-        ui.click(&mut app, "Pattern smoothing + dithering");
+        ui.click(&mut app, "Direct Vibrate (previous)");
+        ui.click(&mut app, "Pattern smoothing + dithering (experimental)");
+        ui.click(&mut app, "Pattern smoothing + dithering (experimental)");
         ui.click(&mut app, "Direct Vibrate (previous)");
         assert_eq!(
             app.config.lovense.output_mode,
