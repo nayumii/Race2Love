@@ -31,13 +31,14 @@ cargo run --locked -- --demo
 The native window has three views:
 
 - **Dashboard:** live speed, RPM, gear, throttle, brake, connection indicators,
-  mixed/scaled/applied output, Demo/LMU selection, telemetry pause, and
+  mixed/scaled/acknowledged output, Demo/LMU selection, telemetry pause, and
   global intensity controls.
 - **Effects:** RPM thresholds expressed as percentages of maximum RPM, vibration
   range, linear/exponential/logarithmic curves, and shift pulse envelopes.
 - **Devices / Settings:** saved Lovense host/port preferences, update rates,
 telemetry timeout, start-minimized, debug values, and configuration location.
-  Connect/discover, explicit toy selection, timed test vibration, and disconnect.
+  Connect/discover, explicit toy selection, timed test vibration, output-mode
+  comparison, and disconnect.
 
 Effect changes apply immediately when valid. Remote address/policy changes latch
 output off and apply when you click Connect. **Emergency Stop** (also **Esc**) latches
@@ -155,8 +156,12 @@ are retained. The global multiplier applies **after mixing**, followed by an
 independent absolute intensity ceiling. All output is normalized to `0..=1`.
 
 Defaults are **60 Hz telemetry**, **60 Hz effects**, **25 Hz device output**, and
-**30 Hz GUI refresh**. Device updates round downward to 1% steps for mock output
-and 5% steps for Lovense. Duplicates are suppressed, except for required Lovense
+**30 Hz GUI refresh**. Mock output uses 1% steps. Lovense retains fractional native
+targets and defaults to Pattern smoothing with optional temporal dithering using
+110 ms slots. Stable integers use direct Vibrate; the previous direct mode remains
+selectable in Devices / Settings. Every emitted level respects the absolute ceiling.
+See [the output comparison](docs/LOVENSE.md#smoother-output-and-comparison) for timing,
+tradeoffs and A/B instructions. Duplicates are suppressed, except for required Lovense
 lease renewal every 500 ms. Stops bypass the positive-output rate limit. Paused
 or unavailable telemetry polls at 1 Hz and inactive effect/UI timers use 2 Hz. These are starting
 choices, not measured latency/CPU guarantees. Lovense commands expire after two seconds without renewal. Hardware timing
@@ -287,11 +292,11 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-All **62 Linux tests** pass: 30 core, three GUI, 15 LMU (including nine Linux
-acquisition tests), one reconnect backoff,
-and 13 fake Remote tests. Four additional Windows-only mapping/process fixtures
+All **73 Linux tests** pass: 31 core, three GUI, 15 LMU (including nine Linux
+acquisition tests), six Lovense shaping/backoff tests,
+and 18 fake Remote tests. Four additional Windows-only mapping/process fixtures
 compile here and run under an isolated Wine prefix; native Windows CI is also
-configured (57 Windows tests in total). Tests cover effect logic,
+configured (68 Windows tests in total). Tests cover effect logic,
 configuration, pipeline safety, GUI controls, typed discovery, targeted request
 bodies, bounded responses/timeouts, finite expiry, renewal/deduplication,
 selection changes, manual-test limits, cancellation, reconnect, toy loss,

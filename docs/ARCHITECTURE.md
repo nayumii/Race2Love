@@ -73,9 +73,23 @@ existing background during attack or release. This also preserves a background
 made of multiple combined effects. Sampling allocates no memory.
 The result is clamped,
 multiplied by global intensity, then capped by maximum intensity. Non-finite
-values fail closed to zero. Each backend supplies downward quantization: 1% for the mock and 5% for Lovense.
+values fail closed to zero. Each backend supplies target resolution: 1% for the
+mock, 5% for direct Lovense mode, and 0.01 native level for smooth Lovense modes.
+Core values stay normalized. `set_vibration_with_limit` forwards the independent
+ceiling, and bound changes bypass deduplication even if the target is unchanged.
+Its default delegates to the existing device method, preserving other backends.
 The gate compares the quantized result. Backends can request a refresh interval;
 Lovense renews unchanged positive output at 500 ms within the output rate cap.
+
+Lovense's existing worker owns a bounded shaper with a native `f32` target, short
+interpolation ramp and 19-slot Pattern history. Pattern uses 110 ms vibration-only
+slots covering the two-second lease. Temporal error diffusion keeps fractional
+averages without exceeding any instantaneous ceiling; replacements account only
+for actual elapsed slots. Stable integers use Function/Vibrate. No extra timers,
+workers, telemetry interfaces or queues are introduced. Strong changes and zero
+bypass interpolation; Stop/connection/failure clear history. The UI can select
+the previous direct-Vibrate mode for A/B comparison; details and measured digital
+simulation tradeoffs are in [LOVENSE.md](LOVENSE.md).
 
 ## Stop and fault handling
 

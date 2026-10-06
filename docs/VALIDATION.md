@@ -1,3 +1,40 @@
+# Lovense output smoothing validation
+
+Recorded 2026-10-06 using Rust/Cargo stable 1.94.1. Formatting and Linux/Windows
+GNU workspace/all-targets checks and Clippy with `-D warnings` passed. All **73
+Linux tests** passed: 31 core, three GUI, 15 LMU, six Lovense unit tests and 18 fake
+Remote tests. All **68 Windows tests** also passed as MinGW-built executables
+under Wine 11.19 in an isolated temporary prefix, including ten LMU tests with
+four Win32 fixtures. This is not native MSVC or physical device validation.
+
+The implementation retains the existing runtime tasks, channels, output rate,
+timeouts and finite leases. No dependency or configuration migration is added.
+Old TOML files load with Pattern/dithering enabled; all three mode settings
+round-trip, and the GUI test saves the selectable previous Vibrate mode.
+
+New tests verify fractional time averages, interpolation, immediate large changes
+and zero, finite Pattern expiry, stable command suppression, targeted Stop,
+unsupported-command fallback and reconnect reset. Malformed responses and other
+API errors fail closed. Emergency Stop interrupts a pending Pattern request. A
+full runtime/fake Remote test checks every scheduled level against the absolute
+ceiling, including tightening it while the mean target remains unchanged, then
+checks telemetry timeout and shutdown. Existing fault tests run in direct Vibrate
+mode to preserve their baseline. No test commands a physical device.
+
+A deterministic comparison ramps native intensity from 10 to 13 over two seconds,
+updates targets every 40 ms and samples scheduled levels every 5 ms. It assumes
+zero network/motor latency. Direct Vibrate has mean absolute error **0.516** native
+levels with six commands; Pattern without dithering has **0.536** with seven;
+Pattern/dithering has **0.306** with 50. Signed mean error improves from **-0.516**
+to **-0.056**. These are digital quantization measurements, not measured physical
+smoothness. Fractional targets can increase changing-output traffic up to the
+existing 25 Hz default cap; stable output only renews the lease every 500 ms.
+
+Physical A/B testing must still compare perceived smoothness, possible dithering
+flutter and feedback latency on the owner's Remote/device. Small changes may
+settle on the next 110 ms Pattern slot; large changes and Stop bypass the ramp.
+The API details, mode comparison and A/B procedure are in [LOVENSE.md](LOVENSE.md).
+
 # Phase 5 validation record
 
 Recorded 2026-10-06 on Linux x86-64, Rust/Cargo stable 1.94.1. The owner confirmed
