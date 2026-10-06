@@ -23,8 +23,9 @@ Connection/selection changes latch emergency stop. Pause Demo, Resume output,
 then Test for one second. Test uses 40% multiplied by global intensity, capped by
 maximum intensity, and leaves Demo paused. It deliberately works without game
 telemetry. Emergency Stop cancels Test and cannot be cleared by Test. Re-enable
-Demo to run engine/shift effects through the toy. Real LMU telemetry is still
-planned. Disconnect stops the selected toy and restores mock output, stopped.
+Demo to run engine/shift effects through the toy, or select native Windows LMU
+on Dashboard (see [LMU.md](LMU.md)). Disconnect stops the selected toy and restores
+mock output, stopped.
 
 Endpoint/policy edits latch output off and apply on Connect. The active endpoint
 is displayed separately from edited preferences. Reconnected toys stay stopped
@@ -91,4 +92,7 @@ parsing and the complete pipeline, including faults, renewal, cancellation and
 command expiry. Before declaring a particular Remote/toy version verified, check
 GetToys, explicit selection, Test, emergency stop, disconnect/reconnect, normal
 exit, and command expiry during LAN loss with that version. Record the platform,
-Remote version and toy model; no physical device was available here.
+Remote version and toy model. On 2026-10-06 the project owner reported that the
+physical hardware test worked well. Toy model, Remote version, endpoint and
+individual acceptance checks were not recorded; broader hardware compatibility
+and fault/expiry behavior remain unverified. Automated tests use fake Remote only.

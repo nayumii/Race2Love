@@ -1,7 +1,7 @@
 # Adapter implementation plan
 
-The Lovense backend is implemented. The remaining simulator sections describe
-future work.
+The Lovense backend and Windows LMU acquisition are implemented. Proton acquisition
+and additional LMU signals remain future work.
 
 ## Phase 2: Lovense local backend
 
@@ -15,8 +15,8 @@ Fake Remote acceptance tests cover protocol headers/bodies, malformed responses,
 HTTP errors, response limits, timeouts, lease expiry/renewal, duplicate suppression,
 selection/disconnect, manual tests, in-flight cancellation, reconnect, toy loss,
 Stop failure bounds, and normal shutdown. GUI tests exercise connection controls
-and error reporting. Physical localhost/LAN Remote and toy verification remain
-outstanding; there was no hardware available in the development environment.
+and error reporting. The owner reported a successful physical hardware test on
+2026-10-06; Remote/toy versions and detailed fault acceptance were not recorded.
 
 See [LOVENSE.md](LOVENSE.md) for setup, official sources, dependency rationale,
 finite command timing, retry limits, and hardware verification steps. Discovery is
@@ -24,17 +24,14 @@ through a configured endpoint; automatic LAN scanning is not implemented.
 
 ## Phase 3: Windows LMU
 
-Create `race2love-lmu`, separating a layout-checked parser from platform mapping
-access. Verify the current LMU-shipped SDK/header and mapping contract before
-adding structures or offsets. Prefer the native shared-memory interface rather
-than a legacy third-party plugin. The official [LMU V1.3 notes](https://lemansultimate.com/le-mans-ultimate-releases-v1-3-update-with-final-elms-content-performance-updates/)
-confirm new shared-memory parameters, so layout assumptions need version checks.
-
-Open a native mapping read-only with the `windows` crate where required. Check
-buffer size/version, reader consistency, player selection, units and game/sample
-freshness. Initially normalize RPM, maximum RPM, gear, speed, throttle and brake.
-Do not require elevation. Fixtures should prove bounds/offset handling, malformed
-buffers, player selection, consistent reads and teardown when LMU exits.
+`race2love-lmu` separates a safe byte decoder/freshness adapter from `SnapshotReader`
+platform access. Windows opens `LMU_Data` read-only, uses the existing SDK lock,
+tracks game process lifetime, and exposes speed, RPM/max RPM, gear, throttle and
+brake plus session/car labels. Synthetic parser/pipeline and Windows named-mapping
+fixtures cover malformed data, player selection, lock contention, freeze, teardown
+and restart. See [LMU.md](LMU.md) for exact verified reference offsets, licenses,
+version guards, ordered update gates and remaining live Windows checks. The
+installed SDK headers have been checked without redistributing or modifying them.
 
 Keep absent optional telemetry as `None`. Inspect reliable wheel slip, suspension,
 acceleration and damage/impact fields only after the basic adapter works. Surface

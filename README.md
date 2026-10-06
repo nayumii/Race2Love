@@ -6,10 +6,12 @@ Ultimate → Lovense Remote/Game Mode**, on Linux with Steam/Proton and Windows
 10/11. The design uses no SimHub, Electron, browser frontend, or mandatory cloud
 service.
 
-**Phase 2 implementation:** the application starts with **Demo telemetry** and an
+**Phase 3 implementation:** the application starts with **Demo telemetry** and an
 **in-memory mock device**. The local Lovense backend is available through an
-explicit Connect and toy selection. Real LMU telemetry is planned for Phases 3
-and 4. See [validation status](docs/VALIDATION.md) for checks and platform limits.
+explicit Connect and toy selection. **Native Windows LMU** is selectable on
+Dashboard or with `--lmu`; Linux/Proton acquisition is Phase 4. The owner reports
+a successful Lovense hardware test. See [validation status](docs/VALIDATION.md)
+for automated checks and remaining live Windows validation.
 
 ## Try Demo
 
@@ -27,16 +29,18 @@ cargo run --locked -- --demo
 The native window has three views:
 
 - **Dashboard:** live speed, RPM, gear, throttle, brake, connection indicators,
-  mixed/scaled/applied output, Demo pause, and global intensity controls.
+  mixed/scaled/applied output, Demo/Windows LMU selection, telemetry pause, and
+  global intensity controls.
 - **Effects:** RPM thresholds expressed as percentages of maximum RPM, vibration
   range, linear/exponential/logarithmic curves, and shift pulse envelopes.
 - **Devices / Settings:** saved Lovense host/port preferences, update rates,
-  telemetry timeout, start-minimized, debug values, and configuration location.
+telemetry timeout, start-minimized, debug values, and configuration location.
   Connect/discover, explicit toy selection, timed test vibration, and disconnect.
 
 Effect changes apply immediately when valid. Remote address/policy changes latch
 output off and apply when you click Connect. **Emergency Stop** (also **Esc**) latches
-output off until **Resume output** is clicked. Pausing Demo also stops output.
+output off until **Resume output** is clicked. Pausing or switching telemetry
+also stops output; switching requires Resume.
 Changed settings save on normal exit; **Save settings** saves explicitly.
 
 For a display-free smoke run of the same workers:
@@ -95,7 +99,7 @@ Normal Windows GNU builds use MinGW. Native MSVC build/runtime validation remain
 ## Architecture
 
 ```text
-TelemetrySource (Demo now; LMU adapter later)
+TelemetrySource (Demo or native Windows LMU)
     ↓ TelemetryFrame (SI units; optional signals)
 independent effect generators
     ↓ continuous effects + transient envelopes
@@ -106,7 +110,7 @@ global intensity multiplier + absolute maximum
 HapticDevice (MockDevice or local Lovense Remote)
 ```
 
-The workspace has an executable plus three library crates:
+The workspace has an executable plus four library crates:
 
 ```text
 Cargo.toml
@@ -119,13 +123,14 @@ crates/race2love-core/src/
   devices.rs                      # device trait and bounded in-memory mock
   runtime.rs                      # telemetry/effects/output tasks and controls
 crates/race2love-lovense/src/       # typed protocol and local connection worker
+crates/race2love-lmu/src/           # shared safe decoder, freshness, Windows mappings
 crates/race2love-gui/src/lib.rs     # native eframe/egui views
 docs/                             # adapter plans and validation record
 ```
 
-The LMU adapter crate will be added with its implementation. The
-core contains no LMU memory layouts or Lovense protocol fields. Telemetry reads,
-effects, and output each have their own Tokio task on a two-worker runtime. The
+The core contains no LMU layouts or Lovense protocol fields. Telemetry discovery
+and reads run in a dedicated blocking worker; effects and output run on a
+two-worker Tokio runtime. The
 GUI reads snapshots and sends settings/controls through latest-value `watch`
 channels; it makes no network requests. Lovense discovery and commands run in
 a separate connection worker. See [architecture details](docs/ARCHITECTURE.md).
@@ -149,7 +154,7 @@ Defaults are **60 Hz telemetry**, **60 Hz effects**, **25 Hz device output**, an
 **30 Hz GUI refresh**. Device updates round downward to 1% steps for mock output
 and 5% steps for Lovense. Duplicates are suppressed, except for required Lovense
 lease renewal every 500 ms. Stops bypass the positive-output rate limit. Paused
-telemetry polls at 1 Hz and inactive effect/UI timers use 2 Hz. These are starting
+or unavailable telemetry polls at 1 Hz and inactive effect/UI timers use 2 Hz. These are starting
 choices, not measured latency/CPU guarantees. Lovense commands expire after two seconds without renewal. Hardware timing
 and CPU/latency still require measurement.
 
@@ -201,21 +206,26 @@ paused when it ends. Enable Demo again to use racing effects.
 
 A crash, power loss, or unreachable Remote can prevent a final network Stop.
 Finite command expiry bounds remaining output under the documented Remote API.
-This behavior is verified against a fake Remote; actual toy/Remote versions have
-not been tested in this environment. See [Lovense details](docs/LOVENSE.md).
+This behavior is verified against a fake Remote. The owner reports successful
+physical testing; toy/Remote versions and detailed fault checks were not recorded.
+See [Lovense details](docs/LOVENSE.md).
 
-## LMU telemetry (planned, Phases 3 and 4)
+## LMU telemetry
 
-LMU provides a native shared-memory interface. Race2Love will use that interface
-directly and normalize samples at the adapter boundary. It will not require
-SimHub or substitute the legacy rFactor 2 plugin format for the native interface.
+LMU provides a native shared-memory interface. Race2Love uses `LMU_Data` directly
+and normalizes samples at the adapter boundary, without SimHub or a third-party DLL.
 LMU's [official V1.3 announcement](https://lemansultimate.com/le-mans-ultimate-releases-v1-3-update-with-final-elms-content-performance-updates/)
 confirms that the shared-memory telemetry interface is evolving.
 
-On **Windows**, the adapter will open the native named mapping read-only, verify
-the current SDK layout/version and sample consistency, select the player's car,
-then expose RPM, maximum RPM, gear, speed, throttle, and brake. Mapping names,
-offsets, and packing are deliberately not guessed or frozen in Phase 1.
+On **Windows**, enable **Settings → Gameplay → Enable Plugins** in LMU and restart
+the game. Select **Le Mans Ultimate** on Dashboard, or launch `race2love.exe --lmu`.
+Enter the car in a driving session. The adapter opens read-only telemetry and uses
+the SDK lock to copy bounded snapshots; it validates the known 1.2–1.4 layout,
+selects the player, and exposes RPM/max RPM, gear, speed, throttle and brake.
+Frozen clocks cannot refresh output. Game exit is detected via a process handle;
+non-realtime/player exit clears output. The current SDK update gates are checked
+in order. See [LMU.md](docs/LMU.md) for the verified installed layout, sources and
+remaining live Windows acceptance.
 
 On **Linux/Proton**, the same parser will be used after a platform adapter finds
 the relevant LMU/Wine process and shared-memory-backed descriptor dynamically.
@@ -269,8 +279,9 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-All **40 tests** pass: 25 core tests, two GUI interaction tests, one reconnect
-backoff test, and 12 fake Remote integration tests. They cover effect logic,
+All **48 Linux tests** pass: 26 core, three GUI, six LMU, one reconnect backoff,
+and 12 fake Remote tests. Three additional Windows-only mapping/process fixtures
+compile here and are configured to run in Windows CI. Tests cover effect logic,
 configuration, pipeline safety, GUI controls, typed discovery, targeted request
 bodies, bounded responses/timeouts, finite expiry, renewal/deduplication,
 selection changes, manual-test limits, cancellation, reconnect, toy loss,
@@ -280,13 +291,13 @@ persistent Stop failures, and shutdown. No real LMU or toy is required.
 Linux and platform compile checks. GitHub CI checks Linux and native Windows/MSVC
 on push and pull requests; the new workflow has not run in this local session.
 
-**Exact Phase 3 next step:** verify LMU's current shipped SDK header and mapping
-contract, then add `race2love-lmu` with a layout-checked parser and native Windows
-read-only mapping access. Initially normalize speed, RPM/max RPM, gear, throttle,
-and brake. Keep the parser shared for the subsequent Linux/Proton adapter.
+**Exact Phase 4 next step:** implement dynamic LMU/Wine process and memfd discovery
+under Proton, reusing `SnapshotReader`, the Phase 3 decoder and freshness rules.
+Verify against the installed SDK and a live session; handle mapping/process restart
+without a fixed Steam path, Proton version, root access or external bridge.
 
-Known limits: real LMU telemetry and physical Lovense/Remote behavior remain
-untested; native Windows/MSVC and native Wayland runtime checks remain; no slip,
+Known limits: native Windows LMU/MSVC execution and native Wayland runtime checks
+remain; broader Lovense hardware/fault acceptance is unrecorded; no slip,
 kerb, collision effects, graphs, tray, autostart, or named profiles. CPU usage and
 end-to-end latency have not been benchmarked.
 
