@@ -7,7 +7,7 @@ use std::{
 };
 
 use race2love_core::{
-    config::{Config, EngineConfig, LocalProtocol, LovenseConfig},
+    config::{Config, EngineConfig, LocalProtocol, LovenseConfig, LovenseOutputMode},
     devices::{DeviceError, HapticDevice},
     effects::ResponseCurve,
     runtime::{RaceRuntime, StopReason},
@@ -46,7 +46,26 @@ struct State {
     encoded: bool,
     get: Reply,
     function: Reply,
-    active: BTreeMap<String, (u8, Instant)>,
+    pattern: Reply,
+    active: BTreeMap<String, ActiveOutput>,
+}
+
+struct ActiveOutput {
+    levels: Vec<u8>,
+    started: Instant,
+    until: Instant,
+    interval: Duration,
+}
+
+impl ActiveOutput {
+    fn level(&self, now: Instant) -> u8 {
+        if now >= self.until {
+            return 0;
+        }
+        let index =
+            (now.duration_since(self.started).as_millis() / self.interval.as_millis()) as usize;
+        self.levels[index.min(self.levels.len() - 1)]
+    }
 }
 
 impl Default for State {
@@ -62,6 +81,7 @@ impl Default for State {
             encoded: true,
             get: Reply::default(),
             function: Reply::default(),
+            pattern: Reply::default(),
             active: BTreeMap::new(),
         }
     }
@@ -78,6 +98,8 @@ impl FakeRemote {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let config = LovenseConfig {
             port: Some(listener.local_addr().unwrap().port()),
+            // Retain all previous acceptance checks against the original strategy.
+            output_mode: LovenseOutputMode::Vibrate,
             ..Default::default()
         };
         let state = Arc::new(Mutex::new(State::default()));
@@ -109,17 +131,23 @@ impl FakeRemote {
             .unwrap()
             .active
             .get(toy)
-            .filter(|(_, until)| Instant::now() < *until)
-            .map_or(0, |(step, _)| *step)
+            .map_or(0, |output| output.level(Instant::now()))
     }
     fn vibrations(&self) -> usize {
         self.records()
             .iter()
             .filter(|r| {
-                r.body["action"]
-                    .as_str()
-                    .is_some_and(|a| a.starts_with("Vibrate:"))
+                r.body["command"] == "Pattern"
+                    || r.body["action"]
+                        .as_str()
+                        .is_some_and(|a| a.starts_with("Vibrate:"))
             })
+            .count()
+    }
+    fn patterns(&self) -> usize {
+        self.records()
+            .iter()
+            .filter(|record| record.body["command"] == "Pattern")
             .count()
     }
     fn queries(&self) -> usize {
@@ -204,23 +232,55 @@ async fn serve(mut stream: TcpStream, shared: Arc<Mutex<State>>) {
                 json!({"code":200, "type":"OK", "data":{"toys":toys}}).to_string(),
             )
         } else {
-            let reply = state.function.clone();
+            let pattern = body["command"] == "Pattern";
+            let reply = if pattern {
+                state.pattern.clone()
+            } else {
+                state.function.clone()
+            };
             if reply.status.is_none() && reply.body.is_none() {
                 let toy = body["toy"]
                     .as_str()
                     .expect("command must target one toy")
                     .to_string();
-                let action = body["action"].as_str().unwrap();
-                if action == "Stop" {
+                if body["action"] == "Stop" {
                     state.active.remove(&toy);
                 } else {
-                    let step: u8 = action.strip_prefix("Vibrate:").unwrap().parse().unwrap();
+                    let levels = if pattern {
+                        assert_eq!(body["apiVer"], 2);
+                        assert_eq!(body["rule"], "V:1;F:v;S:110#");
+                        let levels: Vec<u8> = body["strength"]
+                            .as_str()
+                            .unwrap()
+                            .split(';')
+                            .map(|level| level.parse().unwrap())
+                            .collect();
+                        assert!(!levels.is_empty() && levels.len() <= 50);
+                        levels
+                    } else {
+                        vec![
+                            body["action"]
+                                .as_str()
+                                .unwrap()
+                                .strip_prefix("Vibrate:")
+                                .unwrap()
+                                .parse()
+                                .unwrap(),
+                        ]
+                    };
                     let lease = body["timeSec"].as_u64().unwrap();
                     assert_eq!(lease, 2);
-                    assert!(step <= 20);
-                    state
-                        .active
-                        .insert(toy, (step, Instant::now() + Duration::from_secs(lease)));
+                    assert!(levels.iter().all(|level| *level <= 20));
+                    let started = Instant::now();
+                    state.active.insert(
+                        toy,
+                        ActiveOutput {
+                            levels,
+                            started,
+                            until: started + Duration::from_secs(lease),
+                            interval: Duration::from_millis(110),
+                        },
+                    );
                 }
             }
             (reply, json!({"code":200,"type":"ok"}).to_string())
@@ -660,6 +720,185 @@ async fn rpm_shift_pipeline_applies_live_settings_and_clears_pulses_on_timeout()
     service.shutdown().await;
     assert_eq!(remote.active("b"), 0);
     assert_eq!(remote.records().last().unwrap().body["action"], "Stop");
+}
+
+#[tokio::test]
+async fn fractional_patterns_are_targeted_deduplicated_and_expire_without_renewal() {
+    let mut remote = FakeRemote::start().await;
+    remote.config.output_mode = LovenseOutputMode::PatternDither;
+    let service = connect(&remote).await;
+    service.device.set_vibration(0.525).await.unwrap();
+    assert_eq!(remote.patterns(), 1);
+    assert_eq!(remote.active("a"), 0);
+    let pattern = remote
+        .records()
+        .into_iter()
+        .find(|record| record.body["command"] == "Pattern")
+        .unwrap();
+    let levels: Vec<u8> = pattern.body["strength"]
+        .as_str()
+        .unwrap()
+        .split(';')
+        .map(|level| level.parse().unwrap())
+        .collect();
+    assert_eq!(levels.len(), 19);
+    assert!(levels.iter().all(|level| *level == 10 || *level == 11));
+    assert_eq!(pattern.body["toy"], "b");
+    assert_eq!(pattern.platform, "Race2Love");
+    for _ in 0..5 {
+        service.device.set_vibration(0.525).await.unwrap();
+    }
+    assert_eq!(
+        remote.patterns(),
+        1,
+        "stable fractional output must not restart patterns every frame"
+    );
+    wait_for(|| remote.active("b") == 10).await;
+    wait_for(|| remote.active("b") == 11).await;
+    service.device.stop().await.unwrap();
+    assert_eq!(remote.active("b"), 0);
+    service.device.set_vibration(0.525).await.unwrap();
+    assert_eq!(remote.active("b"), 11, "Stop resets shaping/dither history");
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    assert_eq!(
+        remote.active("b"),
+        0,
+        "Pattern must expire if the application stops renewing"
+    );
+    service.shutdown().await;
+}
+
+#[tokio::test]
+async fn unsupported_pattern_falls_back_once_and_reconnect_resets_capability() {
+    for code in [400, 403] {
+        let mut remote = FakeRemote::start().await;
+        remote.config.output_mode = LovenseOutputMode::PatternDither;
+        remote.state.lock().unwrap().pattern.body =
+            Some(json!({"code":code,"type":"ERROR"}).to_string());
+        let service = connect(&remote).await;
+        service.device.set_vibration(0.525).await.unwrap();
+        assert_eq!(remote.active("b"), 10);
+        assert!(service.control.snapshot().using_vibrate_fallback);
+        assert_eq!(remote.patterns(), 1);
+        service.device.set_vibration(0.575).await.unwrap();
+        assert_eq!(remote.active("b"), 11);
+        assert_eq!(remote.patterns(), 1);
+        service.control.connect(remote.config.clone());
+        wait_for(|| {
+            service.device.is_connected() && !service.control.snapshot().using_vibrate_fallback
+        })
+        .await;
+        assert_eq!(remote.active("b"), 0);
+        service.device.set_vibration(0.525).await.unwrap();
+        assert_eq!(remote.patterns(), 2);
+        service.shutdown().await;
+        assert_eq!(remote.active("b"), 0);
+    }
+}
+
+#[tokio::test]
+async fn malformed_or_invalid_pattern_responses_fail_closed_without_compatibility_retry() {
+    for body in [
+        "bad json".to_owned(),
+        json!({"code":404,"type":"ERROR"}).to_string(),
+    ] {
+        let mut remote = FakeRemote::start().await;
+        remote.config.output_mode = LovenseOutputMode::PatternDither;
+        remote.state.lock().unwrap().pattern.body = Some(body);
+        let service = connect(&remote).await;
+        assert!(service.device.set_vibration(0.525).await.is_err());
+        assert_eq!(remote.patterns(), 1);
+        assert!(!service.control.snapshot().using_vibrate_fallback);
+        assert!(!service.device.is_connected());
+        service.shutdown().await;
+        assert_eq!(remote.active("b"), 0);
+    }
+}
+
+#[tokio::test]
+async fn emergency_stop_preempts_an_accepted_slow_pattern_response() {
+    let mut remote = FakeRemote::start().await;
+    remote.config.output_mode = LovenseOutputMode::PatternDither;
+    let service = connect(&remote).await;
+    let mut config = Config::default();
+    config.effects.engine.min_intensity = 0.525;
+    config.effects.engine.max_intensity = 0.525;
+    config.output.global_intensity = 1.0;
+    remote.state.lock().unwrap().pattern.delay = Duration::from_millis(800);
+    let runtime =
+        RaceRuntime::spawn(Box::new(ConstantSource), service.device.clone(), config).unwrap();
+    wait_for(|| runtime.control.snapshot().controls.emergency_stopped).await;
+    runtime.control.resume();
+    wait_for(|| remote.active("b") > 0).await;
+    let stopped_at = Instant::now();
+    runtime.control.emergency_stop();
+    wait_for(|| remote.active("b") == 0).await;
+    assert!(stopped_at.elapsed() < Duration::from_millis(200));
+    let commands = remote.patterns();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(remote.patterns(), commands);
+    runtime.shutdown().await;
+    service.shutdown().await;
+}
+
+#[tokio::test]
+async fn pattern_pipeline_forwards_a_tighter_ceiling_even_when_target_is_unchanged() {
+    let mut remote = FakeRemote::start().await;
+    remote.config.output_mode = LovenseOutputMode::PatternDither;
+    let service = connect(&remote).await;
+    let (frames, input) = watch::channel(Some((6_000.0, 3)));
+    let mut config = Config::default();
+    config.effects.engine.min_intensity = 0.525;
+    config.effects.engine.max_intensity = 0.525;
+    config.output.global_intensity = 1.0;
+    config.output.max_intensity = 0.8;
+    let runtime = RaceRuntime::spawn(
+        Box::new(ControlledSource { input }),
+        service.device.clone(),
+        config.clone(),
+    )
+    .unwrap();
+    wait_for(|| runtime.control.snapshot().controls.emergency_stopped).await;
+    runtime.control.resume();
+    wait_for(|| remote.patterns() > 0).await;
+    wait_for(|| remote.active("b") == 11).await;
+    let capped_at = remote.records().len();
+    config.output.max_intensity = 0.53;
+    runtime.control.update_config(config.clone()).unwrap();
+    wait_for(|| {
+        remote.records()[capped_at..].iter().any(|record| {
+            record.body["command"] == "Pattern" || record.body["action"] == "Vibrate:10"
+        })
+    })
+    .await;
+    for record in &remote.records()[capped_at..] {
+        if record.body["command"] == "Pattern" {
+            assert!(
+                record.body["strength"]
+                    .as_str()
+                    .unwrap()
+                    .split(';')
+                    .all(|level| level.parse::<u8>().unwrap() <= 10)
+            );
+        }
+    }
+    for _ in 0..25 {
+        assert!(remote.active("b") <= 10);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!((runtime.control.snapshot().effects.intensity - 0.525).abs() < 0.0001);
+    config.output.max_intensity = 0.8;
+    runtime.control.update_config(config).unwrap();
+    wait_for(|| remote.active("b") == 11).await;
+    frames.send_replace(None);
+    wait_for(|| {
+        runtime.control.snapshot().effects.reason == StopReason::StaleTelemetry
+            && remote.active("b") == 0
+    })
+    .await;
+    runtime.shutdown().await;
+    service.shutdown().await;
+    assert_eq!(remote.active("b"), 0);
 }
 
 #[tokio::test]

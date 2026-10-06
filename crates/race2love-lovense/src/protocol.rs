@@ -86,10 +86,7 @@ fn malformed(detail: &str) -> DeviceError {
 }
 
 fn envelope(bytes: &[u8]) -> Result<Envelope, DeviceError> {
-    let response: Envelope = serde_json::from_slice(bytes).map_err(|error| {
-        tracing::debug!(%error, "Malformed Lovense response");
-        malformed("expected a Standard API response")
-    })?;
+    let response = decode_envelope(bytes)?;
     if response.code != 200 || !response.kind.eq_ignore_ascii_case("ok") {
         return Err(DeviceError::Communication(format!(
             "Remote rejected the command (code {})",
@@ -97,6 +94,13 @@ fn envelope(bytes: &[u8]) -> Result<Envelope, DeviceError> {
         )));
     }
     Ok(response)
+}
+
+fn decode_envelope(bytes: &[u8]) -> Result<Envelope, DeviceError> {
+    serde_json::from_slice(bytes).map_err(|error| {
+        tracing::debug!(%error, "Malformed Lovense response");
+        malformed("expected a Standard API response")
+    })
 }
 
 pub fn parse_toys(bytes: &[u8]) -> Result<Vec<Toy>, DeviceError> {
@@ -284,6 +288,47 @@ impl RemoteClient {
 
     pub async fn stop(&self, toy: &str) -> Result<(), DeviceError> {
         self.function(toy, "Stop".into(), 0).await
+    }
+
+    /// False means a valid API response explicitly rejected Pattern as unsupported.
+    /// Transport failures, invalid parameters and malformed replies remain errors.
+    pub(crate) async fn pattern(&self, toy: &str, levels: &[u8]) -> Result<bool, DeviceError> {
+        if toy.is_empty()
+            || levels.is_empty()
+            || levels.len() > 50
+            || levels.iter().any(|n| *n > 20)
+        {
+            return Err(malformed("invalid targeted vibration pattern"));
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Pattern<'a> {
+            command: &'static str,
+            rule: String,
+            strength: String,
+            time_sec: u8,
+            toy: &'a str,
+            api_ver: u8,
+        }
+        let bytes = self
+            .request(&Pattern {
+                command: "Pattern",
+                rule: format!("V:1;F:v;S:{}#", crate::smoothing::INTERVAL.as_millis()),
+                strength: levels
+                    .iter()
+                    .map(u8::to_string)
+                    .collect::<Vec<_>>()
+                    .join(";"),
+                time_sec: LEASE.as_secs() as u8,
+                toy,
+                api_ver: 2,
+            })
+            .await?;
+        if matches!(decode_envelope(&bytes)?.code, 400 | 403) {
+            return Ok(false);
+        }
+        envelope(&bytes)?;
+        Ok(true)
     }
 
     async fn function(&self, toy: &str, action: String, time_sec: u8) -> Result<(), DeviceError> {

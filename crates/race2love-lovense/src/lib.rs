@@ -2,6 +2,7 @@
 //! serializes selection/output and lets Stop preempt discovery without blocking rendering.
 
 mod protocol;
+mod smoothing;
 mod worker;
 
 pub use protocol::{LEASE, RENEWAL, RemoteClient, Toy, parse_toys, vibration_step};

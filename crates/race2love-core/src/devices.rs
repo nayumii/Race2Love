@@ -29,12 +29,18 @@ pub trait HapticDevice: Send + Sync {
     fn name(&self) -> &str;
     fn is_connected(&self) -> bool;
     fn set_vibration(&self, intensity: f32) -> DeviceFuture<'_>;
+    /// Absolute instantaneous ceiling, separate from a possibly fractional target.
+    /// Backends using temporal dithering must cap every emitted native level.
+    fn set_vibration_with_limit(&self, intensity: f32, ceiling: f32) -> DeviceFuture<'_> {
+        self.set_vibration(unit(intensity).min(unit(ceiling)))
+    }
     fn stop(&self) -> DeviceFuture<'_>;
     /// Renew unchanged positive output before the device's finite command expires.
     fn refresh_interval(&self) -> Option<std::time::Duration> {
         None
     }
-    /// Backends may round DOWN to their actual command resolution.
+    /// Backends may round DOWN to their command resolution. A backend that
+    /// schedules fractional averages may retain finer target precision here.
     fn quantize(&self, intensity: f32) -> f32 {
         (unit(intensity) * 100.0).floor() / 100.0
     }

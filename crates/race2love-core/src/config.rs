@@ -58,6 +58,7 @@ pub struct LovenseConfig {
     pub protocol: LocalProtocol,
     pub automatic_reconnect: bool,
     pub request_timeout_ms: u64,
+    pub output_mode: LovenseOutputMode,
 }
 
 impl Default for LovenseConfig {
@@ -68,6 +69,29 @@ impl Default for LovenseConfig {
             protocol: LocalProtocol::Http,
             automatic_reconnect: true,
             request_timeout_ms: 1_000,
+            output_mode: LovenseOutputMode::default(),
+        }
+    }
+}
+
+/// Backward-compatible local output choices for physical A/B comparison.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LovenseOutputMode {
+    Vibrate,
+    Pattern,
+    #[default]
+    PatternDither,
+}
+
+impl LovenseOutputMode {
+    pub const ALL: [Self; 3] = [Self::PatternDither, Self::Pattern, Self::Vibrate];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Vibrate => "Direct Vibrate (previous)",
+            Self::Pattern => "Pattern smoothing",
+            Self::PatternDither => "Pattern smoothing + dithering",
         }
     }
 }
@@ -326,6 +350,21 @@ pub fn config_path() -> Result<PathBuf, ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_configs_default_to_smoothing_and_all_output_modes_round_trip() {
+        let old: Config =
+            toml::from_str("version = 1\n[lovense]\nhost = '127.0.0.1'\nport = 20010\n").unwrap();
+        assert_eq!(old.lovense.output_mode, LovenseOutputMode::PatternDither);
+        for mode in LovenseOutputMode::ALL {
+            let mut config = old.clone();
+            config.lovense.output_mode = mode;
+            assert_eq!(
+                toml::from_str::<Config>(&toml::to_string(&config).unwrap()).unwrap(),
+                config
+            );
+        }
+    }
 
     #[test]
     fn toml_round_trip_and_missing_fields() {

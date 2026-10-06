@@ -6,6 +6,7 @@ protocol = "http" # http or https; HTTPS requires a valid certificate hostname.
 # port = 20010 # Example only: use the port/protocol reported by your Remote.
 automatic_reconnect = true
 request_timeout_ms = 1000
+output_mode = "pattern_dither" # pattern_dither, pattern, or vibrate (previous output)
 
 [effects.engine]
 enabled = true

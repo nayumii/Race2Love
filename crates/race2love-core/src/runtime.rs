@@ -95,7 +95,8 @@ pub struct EffectSnapshot {
 pub struct DeviceSnapshot {
     pub name: String,
     pub connected: bool,
-    /// Last successfully applied intensity, not merely a desired value.
+    /// Last backend-acknowledged target. Pattern backends may realize this as an
+    /// average over adjacent physical levels; this is not hardware readback.
     pub intensity: f32,
     pub error: Option<String>,
 }
@@ -588,6 +589,7 @@ async fn output_task(
     let mut device_epoch = device.connection_epoch();
     let mut resume_epoch = controls.borrow().resume_epoch;
     let mut last_request = None;
+    let mut last_ceiling = None;
     // A communication failure latches output until an explicit Stop + Resume.
     let mut fault_latched = false;
     let initial_timeout = Duration::from_millis(config.borrow().lovense.request_timeout_ms);
@@ -687,6 +689,14 @@ async fn output_task(
                 .checked_duration_since(effect.heartbeat)
                 .is_some_and(|age| age < deadline)
             && effect.reason == StopReason::Running;
+        let ceiling =
+            unit(settings.output.global_intensity).min(unit(settings.output.max_intensity));
+        if last_ceiling != Some(ceiling.to_bits()) {
+            // The target can stay unchanged while a tighter ceiling forbids a
+            // dither's upper level. Forward that bound despite deduplication.
+            gate.reset();
+            last_ceiling = Some(ceiling.to_bits());
+        }
         let desired = if common_safe && testing {
             scale_output(
                 0.4,
@@ -756,7 +766,7 @@ async fn output_task(
                         gate.reset();
                         (0.0, timed_stop(device.as_ref(), request_timeout).await)
                     }
-                    result = timeout(request_timeout, device.set_vibration(intensity)) => {
+                    result = timeout(request_timeout, device.set_vibration_with_limit(intensity, ceiling)) => {
                         (intensity, result.map_err(|_| DeviceError::Timeout).and_then(|result| result))
                     }
                 }

@@ -227,7 +227,7 @@ impl Race2LoveApp {
         ui.add_space(12.0);
         meter(ui, "Mixed effects", snapshot.effects.mixed);
         meter(ui, "Scaled target", snapshot.effects.intensity);
-        meter(ui, "Applied output", snapshot.device.intensity);
+        meter(ui, "Acknowledged device target", snapshot.device.intensity);
         if self
             .devices
             .as_ref()
@@ -395,8 +395,19 @@ impl Race2LoveApp {
             egui::Slider::new(&mut self.config.lovense.request_timeout_ms, 100..=5_000)
                 .text("API timeout (ms)"),
         );
+        egui::ComboBox::from_id_salt("lovense_output_mode")
+            .selected_text(self.config.lovense.output_mode.label())
+            .show_ui(ui, |ui| {
+                for mode in race2love_core::config::LovenseOutputMode::ALL {
+                    ui.selectable_value(&mut self.config.lovense.output_mode, mode, mode.label());
+                }
+            });
+        ui.small("Compare modes with the same effects/intensity. Connect, reselect the toy and Resume to apply.");
         if let (Some(lovense), Some((device, demo))) = (&self.lovense, &self.devices) {
             let remote = lovense.snapshot();
+            if remote.using_vibrate_fallback {
+                ui.small("Remote rejected Pattern; using direct Vibrate until reconnect.");
+            }
             ui.horizontal_wrapped(|ui| {
                 if ui.button("Connect / Discover toys").clicked()
                     && self.control.update_config(self.config.clone()).is_ok()
@@ -782,6 +793,12 @@ mod tests {
         assert!(app.page == Page::Settings);
         ui.click(&mut app, "Show telemetry debug values on Dashboard");
         assert!(app.config.ui.show_debug);
+        ui.click(&mut app, "Pattern smoothing + dithering");
+        ui.click(&mut app, "Direct Vibrate (previous)");
+        assert_eq!(
+            app.config.lovense.output_mode,
+            race2love_core::config::LovenseOutputMode::Vibrate
+        );
         ui.click(&mut app, "Save settings");
         assert_eq!(Config::load(&path).unwrap(), app.config);
         assert!(!app.dirty);

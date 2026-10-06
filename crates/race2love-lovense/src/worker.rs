@@ -1,8 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use race2love_core::{
-    config::LovenseConfig,
+    config::{LovenseConfig, LovenseOutputMode},
     devices::{DeviceError, DeviceFuture, HapticDevice},
+    unit,
 };
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -10,6 +11,7 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 
+use crate::smoothing::{Output, Smoother};
 use crate::{RENEWAL, RemoteClient, Toy, vibration_step};
 
 const POLL: Duration = Duration::from_secs(2);
@@ -47,6 +49,8 @@ pub struct LovenseSnapshot {
     pub epoch: u64,
     pub retries: usize,
     pub error: Option<String>,
+    pub output_mode: LovenseOutputMode,
+    pub using_vibrate_fallback: bool,
 }
 
 #[derive(Clone, Default)]
@@ -95,6 +99,7 @@ impl LovenseControl {
 
 struct Command {
     intensity: Option<f32>,
+    ceiling: f32,
     epoch: u64,
     reply: oneshot::Sender<Result<(), DeviceError>>,
 }
@@ -105,11 +110,12 @@ pub struct LovenseDevice {
 }
 
 impl LovenseDevice {
-    async fn command(&self, intensity: Option<f32>) -> Result<(), DeviceError> {
+    async fn command(&self, intensity: Option<f32>, ceiling: f32) -> Result<(), DeviceError> {
         let (reply, result) = oneshot::channel();
         self.commands
             .send(Command {
                 intensity,
+                ceiling,
                 epoch: self.connection_epoch(),
                 reply,
             })
@@ -127,16 +133,25 @@ impl HapticDevice for LovenseDevice {
         self.state.borrow().selected_ready
     }
     fn set_vibration(&self, intensity: f32) -> DeviceFuture<'_> {
-        Box::pin(self.command(Some(intensity)))
+        Box::pin(self.command(Some(intensity), 1.0))
+    }
+    fn set_vibration_with_limit(&self, intensity: f32, ceiling: f32) -> DeviceFuture<'_> {
+        Box::pin(self.command(Some(intensity), ceiling))
     }
     fn stop(&self) -> DeviceFuture<'_> {
-        Box::pin(self.command(None))
+        Box::pin(self.command(None, 0.0))
     }
     fn refresh_interval(&self) -> Option<Duration> {
         Some(RENEWAL)
     }
     fn quantize(&self, intensity: f32) -> f32 {
-        f32::from(vibration_step(intensity)) / 20.0
+        let state = self.state.borrow();
+        if state.output_mode == LovenseOutputMode::Vibrate || state.using_vibrate_fallback {
+            f32::from(vibration_step(intensity)) / 20.0
+        } else {
+            // Preserve fractions to 0.01 native level, suppressing insignificant jitter.
+            (unit(intensity) * 2000.0).floor() / 2000.0
+        }
     }
     fn connection_epoch(&self) -> u64 {
         self.state.borrow().epoch
@@ -171,6 +186,7 @@ impl LovenseService {
                 applied: Desired::default(),
                 snapshot: LovenseSnapshot::default(),
                 due: None,
+                smoother: Smoother::default(),
             }
             .run(),
         );
@@ -213,6 +229,7 @@ struct Worker {
     applied: Desired,
     snapshot: LovenseSnapshot,
     due: Option<Instant>,
+    smoother: Smoother,
 }
 
 impl Worker {
@@ -220,6 +237,8 @@ impl Worker {
         self.state.send_replace(self.snapshot.clone());
     }
     fn invalidate(&mut self) {
+        self.smoother.reset();
+        self.snapshot.using_vibrate_fallback = false;
         self.snapshot.selected_ready = false;
         self.snapshot.epoch = self.snapshot.epoch.wrapping_add(1);
         self.publish();
@@ -258,6 +277,7 @@ impl Worker {
         }
         let endpoint_changed = self.applied.config != desired.config || !self.applied.enabled;
         self.applied = desired;
+        self.snapshot.output_mode = self.applied.config.output_mode;
         self.snapshot.error = None;
         self.snapshot.retries = 0;
         if !self.applied.enabled {
@@ -361,20 +381,73 @@ impl Worker {
                 let _ = command.reply.send(Err(DeviceError::Disconnected));
                 return;
             }
-            tokio::select! {
+            let mode = if self.snapshot.using_vibrate_fallback {
+                LovenseOutputMode::Vibrate
+            } else {
+                self.applied.config.output_mode
+            };
+            let Some(output) =
+                self.smoother
+                    .prepare(intensity, command.ceiling, mode, Instant::now().into_std())
+            else {
+                let _ = command.reply.send(Ok(()));
+                return;
+            };
+            let request = async {
+                match output {
+                    Output::Vibrate(level) => {
+                        client.vibrate(&toy, f32::from(level) / 20.0).await?;
+                        Ok(true)
+                    }
+                    Output::Pattern(levels) => {
+                        if client.pattern(&toy, &levels).await? {
+                            Ok(true)
+                        } else {
+                            // One bounded compatibility fallback, never after an
+                            // ambiguous timeout. Clear any previous pattern first.
+                            client.stop(&toy).await?;
+                            client
+                                .vibrate(&toy, unit(intensity).min(unit(command.ceiling)))
+                                .await?;
+                            Ok(false)
+                        }
+                    }
+                }
+            };
+            let result = tokio::select! {
                 biased;
                 _ = self.shutdown.changed() => return,
                 _ = self.desired.changed() => return,
                 _ = command.reply.closed() => {
                     // The caller canceled an in-flight command (Stop/timeout).
                     // The request may already have arrived: follow it with Stop.
-                    client.stop(&toy).await
+                    self.smoother.reset();
+                    client.stop(&toy).await.map(|()| true)
                 }
-                result = client.vibrate(&toy, intensity) => result,
+                result = request => result,
+            };
+            if let Ok(false) = result {
+                tracing::warn!(
+                    "Remote does not support Pattern; using direct Vibrate until reconnect"
+                );
+                self.snapshot.using_vibrate_fallback = true;
+                self.smoother.reset();
+                let _ = self.smoother.prepare(
+                    intensity,
+                    command.ceiling,
+                    LovenseOutputMode::Vibrate,
+                    Instant::now().into_std(),
+                );
+                self.publish();
             }
+            result.map(|_| ())
         } else {
+            self.smoother.reset();
             client.stop(&toy).await
         };
+        if result.is_err() {
+            self.smoother.reset();
+        }
         if let Err(error) = &result
             && self.snapshot.state == ConnectionState::Connected
         {
@@ -466,6 +539,7 @@ mod tests {
             },
             snapshot: LovenseSnapshot::default(),
             due: None,
+            smoother: Smoother::default(),
         };
         for delay in RETRIES {
             worker.failure(&DeviceError::Timeout);
