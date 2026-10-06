@@ -56,11 +56,15 @@ pub enum TelemetryError {
     Disconnected,
     #[error("Telemetry is unavailable: {0}")]
     Unavailable(String),
+    /// Process/mapping is connected, but old player data must be cleared now.
+    #[error("{0}")]
+    Waiting(String),
 }
 
 /// Reads run on a background task, never in the GUI. Implementations must perform
 /// bounded, quick reads; expensive process discovery belongs in a blocking worker.
-/// None means no fresh sample. Game closure must be reported as disconnection.
+/// None means no fresh sample. Waiting clears a previous frame without closing
+/// the connection. Game closure must be reported as disconnection.
 pub trait TelemetrySource: Send {
     fn name(&self) -> &'static str;
     fn connect(&mut self) -> Result<(), TelemetryError>;

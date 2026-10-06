@@ -17,7 +17,7 @@ use crate::{
     devices::{DeviceError, HapticDevice},
     effects::EffectEngine,
     scale_output,
-    telemetry::{TelemetryFrame, TelemetrySource},
+    telemetry::{TelemetryError, TelemetryFrame, TelemetrySource},
     unit,
 };
 
@@ -27,6 +27,9 @@ pub struct Controls {
     pub emergency_stopped: bool,
     pub test_pulse: Option<TestPulse>,
     pub resume_epoch: u64,
+    /// Prevent old telemetry/effects from crossing a source switch, even if the
+    /// caller resumes before the telemetry worker acknowledges that switch.
+    pub source_generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,12 +44,14 @@ impl Default for Controls {
             emergency_stopped: false,
             test_pulse: None,
             resume_epoch: 0,
+            source_generation: 0,
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct TelemetrySnapshot {
+    pub source_generation: u64,
     pub source_name: &'static str,
     pub connected: bool,
     pub frame: Option<TelemetryFrame>,
@@ -78,6 +83,7 @@ impl StopReason {
 
 #[derive(Clone, Copy, Debug)]
 pub struct EffectSnapshot {
+    pub source_generation: u64,
     pub mixed: f32,
     pub intensity: f32,
     pub reason: StopReason,
@@ -111,6 +117,13 @@ pub struct RuntimeControl {
     effects: watch::Receiver<EffectSnapshot>,
     device: watch::Receiver<DeviceSnapshot>,
     selected_device: watch::Sender<Arc<dyn HapticDevice>>,
+    selected_source: watch::Sender<Option<SourceSelection>>,
+}
+
+#[derive(Clone)]
+struct SourceSelection {
+    generation: u64,
+    factory: Arc<dyn Fn() -> Box<dyn TelemetrySource> + Send + Sync>,
 }
 
 impl RuntimeControl {
@@ -152,7 +165,26 @@ impl RuntimeControl {
         self.emergency_stop();
         self.selected_device.send_replace(device);
     }
-    /// Deliberate manual output independent of game telemetry. Demo stays paused
+    /// Factory runs in the telemetry worker, never the GUI. Latest selection
+    /// replaces pending choices, disconnects the old source and latches Stop.
+    pub fn select_source(
+        &self,
+        factory: impl Fn() -> Box<dyn TelemetrySource> + Send + Sync + 'static,
+    ) {
+        let mut generation = 0;
+        self.controls.send_modify(|controls| {
+            controls.emergency_stopped = true;
+            controls.test_pulse = None;
+            controls.source_enabled = true;
+            controls.source_generation = controls.source_generation.wrapping_add(1);
+            generation = controls.source_generation;
+        });
+        self.selected_source.send_replace(Some(SourceSelection {
+            generation,
+            factory: Arc::new(factory),
+        }));
+    }
+    /// Deliberate manual output independent of game telemetry. The source stays paused
     /// after the pulse; emergency stop must be explicitly resumed beforehand.
     pub fn test_vibration(&self) -> bool {
         let mut accepted = false;
@@ -181,7 +213,7 @@ pub struct RaceRuntime {
 }
 
 impl RaceRuntime {
-    /// Must be called from a Tokio runtime. Phase 1 supplies Demo + MockDevice.
+    /// Must be called from a Tokio runtime. Adapters are supplied by the caller.
     pub fn spawn(
         source: Box<dyn TelemetrySource>,
         device: Arc<dyn HapticDevice>,
@@ -192,12 +224,14 @@ impl RaceRuntime {
         let (controls_tx, controls_rx) = watch::channel(Controls::default());
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (telemetry_tx, telemetry_rx) = watch::channel(TelemetrySnapshot {
+            source_generation: 0,
             source_name: source.name(),
             connected: false,
             frame: None,
             error: None,
         });
         let (effects_tx, effects_rx) = watch::channel(EffectSnapshot {
+            source_generation: 0,
             mixed: 0.0,
             intensity: 0.0,
             reason: StopReason::NoTelemetry,
@@ -210,14 +244,26 @@ impl RaceRuntime {
             error: None,
         });
         let (selected_device_tx, selected_device_rx) = watch::channel(device.clone());
+        let (selected_source_tx, selected_source_rx) = watch::channel(None);
         let tasks = vec![
-            tokio::spawn(telemetry_task(
-                source,
-                telemetry_tx,
-                config_rx.clone(),
-                controls_rx.clone(),
-                shutdown_rx.clone(),
-            )),
+            // Synchronous platform discovery/mapping APIs must never stall the
+            // async effects or network executor. This blocking worker still uses
+            // channel/timer waits, so idle operation does not busy-poll.
+            {
+                let telemetry_config = config_rx.clone();
+                let telemetry_controls = controls_rx.clone();
+                let telemetry_shutdown = shutdown_rx.clone();
+                tokio::task::spawn_blocking(move || {
+                    tokio::runtime::Handle::current().block_on(telemetry_task(
+                        source,
+                        telemetry_tx,
+                        telemetry_config,
+                        telemetry_controls,
+                        telemetry_shutdown,
+                        selected_source_rx,
+                    ));
+                })
+            },
             tokio::spawn(effects_task(
                 telemetry_rx.clone(),
                 effects_tx,
@@ -246,6 +292,7 @@ impl RaceRuntime {
                 effects: effects_rx,
                 device: device_rx,
                 selected_device: selected_device_tx,
+                selected_source: selected_source_tx,
             },
             tasks,
         })
@@ -290,18 +337,33 @@ async fn telemetry_task(
     mut config: watch::Receiver<Arc<Config>>,
     mut controls: watch::Receiver<Controls>,
     mut shutdown: watch::Receiver<bool>,
+    mut selected_source: watch::Receiver<Option<SourceSelection>>,
 ) {
     let mut clock = ticker(config.borrow().output.telemetry_hz);
     let mut clock_hz = config.borrow().output.telemetry_hz;
-    let mut connection_attempted = false;
+    let mut next_attempt = Instant::now();
     let mut snapshot = state.borrow().clone();
     loop {
         tokio::select! {
             biased;
             _ = shutdown.changed() => break,
+            result = selected_source.changed() => {
+                if result.is_err() { break; }
+                let selection = selected_source.borrow().clone();
+                if let Some(selection) = selection {
+                    source.disconnect();
+                    source = (selection.factory)();
+                    snapshot = TelemetrySnapshot {
+                        source_generation: selection.generation,
+                        source_name: source.name(), connected: false, frame: None, error: None,
+                    };
+                    next_attempt = Instant::now();
+                    tracing::info!(source = source.name(), "Telemetry source selected");
+                }
+            }
             result = controls.changed() => {
                 if result.is_err() { break; }
-                if !controls.borrow().source_enabled { connection_attempted = false; }
+                next_attempt = Instant::now();
             }
             result = config.changed() => {
                 if result.is_err() { break; }
@@ -318,39 +380,54 @@ async fn telemetry_task(
                 source.disconnect();
                 tracing::info!(source = source.name(), "Telemetry disconnected");
             }
-            connection_attempted = false;
+            next_attempt = Instant::now();
             snapshot.connected = false;
             snapshot.frame = None;
             snapshot.error = None;
         } else {
-            if !source.is_connected() && !connection_attempted {
-                connection_attempted = true;
+            if !source.is_connected() && Instant::now() >= next_attempt {
+                next_attempt = Instant::now() + Duration::from_secs(1);
                 match source.connect() {
                     Ok(()) => {
                         tracing::info!(source = source.name(), "Telemetry connected");
                         snapshot.error = None;
                     }
                     Err(error) => {
-                        tracing::warn!(%error, "Telemetry connection failed");
-                        snapshot.error = Some(error.to_string());
+                        let message = error.to_string();
+                        if snapshot.error.as_ref() != Some(&message) {
+                            tracing::warn!(%error, "Telemetry connection failed");
+                        }
+                        snapshot.error = Some(message);
                     }
                 }
             }
             if source.is_connected() {
                 match source.read_frame() {
-                    Ok(Some(frame)) => snapshot.frame = Some(frame),
+                    Ok(Some(frame)) => {
+                        snapshot.frame = Some(frame);
+                        snapshot.error = None;
+                    }
                     Ok(None) => {}
                     Err(error) => {
-                        tracing::warn!(%error, "Telemetry read failed");
-                        snapshot.error = Some(error.to_string());
-                        source.disconnect();
+                        let message = error.to_string();
+                        if snapshot.error.as_ref() != Some(&message) {
+                            tracing::warn!(%error, "Telemetry unavailable");
+                        }
+                        snapshot.error = Some(message);
+                        if !matches!(error, TelemetryError::Waiting(_)) {
+                            source.disconnect();
+                        }
                         snapshot.frame = None;
+                        next_attempt = Instant::now() + Duration::from_secs(1);
                     }
                 }
             }
             snapshot.connected = source.is_connected();
         }
-        let desired_hz = if controls.borrow().source_enabled {
+        let desired_hz = if controls.borrow().source_enabled
+            && source.is_connected()
+            && snapshot.error.is_none()
+        {
             config.borrow().output.telemetry_hz
         } else {
             1
@@ -402,7 +479,10 @@ async fn effects_task(
             StopReason::EmergencyStop
         } else if !controls.source_enabled {
             StopReason::SourceDisabled
-        } else if !telemetry.connected || telemetry.frame.is_none() {
+        } else if telemetry.source_generation != controls.source_generation
+            || !telemetry.connected
+            || telemetry.frame.is_none()
+        {
             StopReason::NoTelemetry
         } else if !telemetry_is_fresh(
             telemetry.frame.as_ref(),
@@ -438,6 +518,7 @@ async fn effects_task(
             clock_hz = desired_hz;
         }
         state.send_replace(EffectSnapshot {
+            source_generation: telemetry.source_generation,
             mixed,
             intensity,
             reason,
@@ -445,6 +526,7 @@ async fn effects_task(
         });
     }
     state.send_replace(EffectSnapshot {
+        source_generation: controls.borrow().source_generation,
         mixed: 0.0,
         intensity: 0.0,
         reason: StopReason::Shutdown,
@@ -598,6 +680,8 @@ async fn output_task(
         let safe = common_safe
             && latest_controls.source_enabled
             && sample.connected
+            && sample.source_generation == latest_controls.source_generation
+            && effect.source_generation == latest_controls.source_generation
             && telemetry_is_fresh(sample.frame.as_ref(), now, deadline)
             && now
                 .checked_duration_since(effect.heartbeat)
@@ -818,6 +902,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn source_switch_blocks_old_frames_even_with_immediate_resume() {
+        let device = Arc::new(MockDevice::default());
+        let runtime = RaceRuntime::spawn(
+            Box::new(DemoSource::default()),
+            device.clone(),
+            Config::default(),
+        )
+        .unwrap();
+        wait_for(|| device.intensity() > 0.0).await;
+        runtime
+            .control
+            .select_source(|| Box::new(MockTelemetrySource::default()));
+        runtime.control.resume();
+        wait_for(|| {
+            runtime.control.snapshot().telemetry.source_name == "Mock telemetry"
+                && device.intensity() == 0.0
+        })
+        .await;
+        let snapshot = runtime.control.snapshot();
+        assert_eq!(
+            snapshot.telemetry.source_generation,
+            snapshot.controls.source_generation
+        );
+        assert!(snapshot.telemetry.frame.is_none());
+        // Latest choice wins, while Stop remains latched until explicit Resume.
+        runtime
+            .control
+            .select_source(|| Box::new(MockTelemetrySource::default()));
+        runtime
+            .control
+            .select_source(|| Box::new(DemoSource::default()));
+        wait_for(|| {
+            runtime.control.snapshot().telemetry.source_name == "Demo"
+                && runtime.control.snapshot().telemetry.frame.is_some()
+        })
+        .await;
+        assert!(runtime.control.snapshot().controls.emergency_stopped);
+        assert_eq!(device.intensity(), 0.0);
+        runtime.control.resume();
+        wait_for(|| device.intensity() > 0.0).await;
+        runtime.shutdown().await;
+        assert_eq!(device.intensity(), 0.0);
+    }
+
+    #[tokio::test]
     async fn configuration_changes_apply_without_restarting_workers() {
         let device = Arc::new(MockDevice::default());
         let runtime = RaceRuntime::spawn(
@@ -981,6 +1110,7 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (telemetry_tx, telemetry_rx) = watch::channel(TelemetrySnapshot {
             source_name: "Demo",
+            source_generation: 0,
             connected: true,
             frame: Some(DemoSource::frame_at(1.0, Instant::now())),
             error: None,
@@ -988,6 +1118,7 @@ mod tests {
         // Keep this sender alive but deliberately do not refresh its heartbeat.
         let (effects_tx, effects_rx) = watch::channel(EffectSnapshot {
             mixed: 0.5,
+            source_generation: 0,
             intensity: 0.25,
             reason: StopReason::Running,
             heartbeat: Instant::now(),
