@@ -26,7 +26,7 @@ pub struct DecodedFrame {
     pub game_version: i32,
 }
 
-/// `None` means no live player car (menus, replay, loading, or vehicle exit).
+/// `None` means no live player car (menus, non-realtime, loading or vehicle exit).
 /// Callers must clear old output immediately on this result.
 pub fn decode(bytes: &[u8], observed: Instant) -> Result<Option<DecodedFrame>, DecodeError> {
     if bytes.len() < PAYLOAD_SIZE {

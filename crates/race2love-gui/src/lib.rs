@@ -84,7 +84,7 @@ impl Race2LoveApp {
     fn header(&mut self, ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
         ui.horizontal_wrapped(|ui| {
             ui.heading("Race2Love");
-            ui.label("Phase 3 · Native LMU telemetry");
+            ui.label("Phase 4 · Windows & Proton LMU telemetry");
             ui.separator();
             for (page, title) in [
                 (Page::Dashboard, "Dashboard"),
@@ -122,6 +122,9 @@ impl Race2LoveApp {
                 },
             );
         });
+        if snapshot.controls.emergency_stopped {
+            ui.small("Output is stopped. Press Resume output when ready. Connecting a device or changing telemetry stops output.");
+        }
         ui.separator();
     }
 
@@ -138,7 +141,7 @@ impl Race2LoveApp {
             }
             if ui
                 .add_enabled(
-                    cfg!(windows),
+                    cfg!(any(windows, target_os = "linux")),
                     egui::Button::selectable(
                         snapshot.telemetry.source_name == "Le Mans Ultimate",
                         "Le Mans Ultimate",
@@ -149,8 +152,10 @@ impl Race2LoveApp {
                 self.control.select_source(race2love_lmu::native_source);
             }
         });
-        if !cfg!(windows) {
-            ui.small("LMU under Linux/Proton arrives in Phase 4. Demo remains available.");
+        if !cfg!(any(windows, target_os = "linux")) {
+            ui.small(
+                "Native LMU telemetry supports Windows and Linux/Proton. Demo remains available.",
+            );
         }
         let fresh = snapshot.telemetry.connected
             && telemetry_is_fresh(
@@ -887,7 +892,17 @@ mod tests {
         wait_for(|| runtime.control.snapshot().telemetry.source_name == "Demo").await;
         assert!(runtime.control.snapshot().controls.emergency_stopped);
         wait_for(|| device.intensity() == 0.0).await;
-        #[cfg(not(windows))]
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            let generation = runtime.control.snapshot().controls.source_generation;
+            ui.click(&mut app, "Le Mans Ultimate");
+            assert!(runtime.control.snapshot().controls.source_generation > generation);
+            assert!(runtime.control.snapshot().controls.emergency_stopped);
+            wait_for(|| runtime.control.snapshot().telemetry.source_name == "Le Mans Ultimate")
+                .await;
+            assert_eq!(device.intensity(), 0.0);
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             let generation = runtime.control.snapshot().controls.source_generation;
             ui.click(&mut app, "Le Mans Ultimate");

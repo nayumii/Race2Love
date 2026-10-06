@@ -2095,6 +2095,7 @@ name = "race2love-lmu"
 version = "0.1.0"
 dependencies = [
  "race2love-core",
+ "rustix 1.1.5",
  "thiserror 2.0.21",
  "tokio",
  "tracing",

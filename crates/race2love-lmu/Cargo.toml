@@ -17,7 +17,11 @@ windows.workspace = true
 [dev-dependencies]
 tokio.workspace = true
 
-# Only windows.rs may opt into unsafe Win32 mapping access. The decoder remains safe.
+# Maintained Bytecode Alliance bindings; tests only, for real Linux memfds.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix = { version = "1.1", default-features = false, features = ["fs", "std"] }
+
+# Only windows.rs opts into unsafe Win32 access. Linux reads and parsing are safe.
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"

@@ -3,6 +3,8 @@
 
 pub mod decoder;
 pub mod layout;
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(windows)]
 mod windows;
 
@@ -10,8 +12,9 @@ use std::time::{Duration, Instant};
 
 use race2love_core::telemetry::{TelemetryError, TelemetryFrame, TelemetrySource};
 
-/// Acquisition boundary reused by the future Proton adapter and fixture tests.
-/// A successful snapshot must be bounded, owned and synchronized with its writer.
+/// Acquisition boundary shared by Windows, Proton and fixture tests.
+/// Snapshots are bounded and owned. Windows uses the SDK lock; Proton performs
+/// repeated read-only consistency checks (see docs/LMU.md for their limitations).
 pub trait SnapshotReader: Send {
     fn connect(&mut self) -> Result<(), TelemetryError>;
     fn disconnect(&mut self);
@@ -117,22 +120,27 @@ pub fn native_source() -> Box<dyn TelemetrySource> {
     {
         Box::new(LmuSource::new(windows::WindowsReader::default()))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        Box::new(LmuSource::new(linux::LinuxReader::default()))
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         Box::new(UnsupportedSource)
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 struct UnsupportedSource;
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 impl TelemetrySource for UnsupportedSource {
     fn name(&self) -> &'static str {
         "Le Mans Ultimate"
     }
     fn connect(&mut self) -> Result<(), TelemetryError> {
         Err(TelemetryError::Unavailable(
-            "LMU under Linux/Proton is planned for Phase 4. Choose Demo on this build.".into(),
+            "LMU telemetry is supported on Windows and Linux/Proton. Choose Demo on this platform."
+                .into(),
         ))
     }
     fn disconnect(&mut self) {}

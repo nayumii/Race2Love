@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Race2Love\n\nUsage: race2love [--demo | --lmu] [--demo-seconds SECONDS]\n\nWithout arguments, launch the native Demo window.\n--lmu selects native Windows LMU shared memory.\n--demo-seconds runs Demo with mock output without a display.\nRACE2LOVE_CONFIG overrides the TOML settings path.\nRUST_LOG controls tracing output."
+                    "Race2Love\n\nUsage: race2love [--demo | --lmu] [--demo-seconds SECONDS]\n\nWithout arguments, launch the native Demo window.\n--lmu selects direct LMU telemetry on Windows or Linux/Proton.\n--demo-seconds runs Demo with mock output without a display.\nRACE2LOVE_CONFIG overrides the TOML settings path.\nRUST_LOG controls tracing output."
                 );
                 return Ok(());
             }
