@@ -30,7 +30,8 @@ tracks game process lifetime, and exposes speed, RPM/max RPM, gear, throttle and
 brake plus session/car labels. Synthetic parser/pipeline and Windows named-mapping
 fixtures cover malformed data, player selection, lock contention, freeze, teardown
 and restart. See [LMU.md](LMU.md) for exact verified reference offsets, licenses,
-version guards, ordered update gates and remaining live Windows checks. The
+version guards, notification-independent locked polling and remaining live Windows
+checks. The
 installed SDK headers have been checked without redistributing or modifying them.
 
 Keep absent optional telemetry as `None`. Inspect reliable wheel slip, suspension,

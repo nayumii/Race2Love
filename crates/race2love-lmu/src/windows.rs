@@ -22,8 +22,8 @@ use windows::{
                 OpenFileMappingW, UnmapViewOfFile,
             },
             Threading::{
-                EVENT_MODIFY_STATE, OpenEventW, OpenProcess, PROCESS_SYNCHRONIZE,
-                SYNCHRONIZATION_SYNCHRONIZE, SetEvent, WaitForSingleObject,
+                EVENT_MODIFY_STATE, OpenEventW, OpenProcess, PROCESS_SYNCHRONIZE, SetEvent,
+                WaitForSingleObject,
             },
         },
     },
@@ -131,8 +131,6 @@ struct Connection {
     data: Mapping,
     lock: Mapping,
     wake: OwnedHandle,
-    hold_gate: OwnedHandle,
-    data_gate: OwnedHandle,
 }
 
 /// Unlike the SDK's blocking client, this consumer never waits or spins. A busy
@@ -173,10 +171,6 @@ impl SnapshotReader for WindowsReader {
             unsafe { OpenEventW(EVENT_MODIFY_STATE, false, w!("LMU_SharedMemoryLockEvent")) }
                 .map_err(|error| unavailable("Cannot open LMU synchronization event", error))?,
         );
-        // Current shipped SDK requires checking Hold before Data. Read-only
-        // synchronization rights; these events are never created or signaled.
-        let hold_gate = open_gate(w!("LMU_Data_HoldEvent"))?;
-        let data_gate = open_gate(w!("LMU_Data_DataEvent"))?;
         tracing::info!(
             pid,
             mapping = "LMU_Data",
@@ -188,8 +182,6 @@ impl SnapshotReader for WindowsReader {
             data,
             lock,
             wake,
-            hold_gate,
-            data_gate,
         });
         Ok(())
     }
@@ -215,21 +207,11 @@ impl SnapshotReader for WindowsReader {
                 ));
             }
         }
-        // Preserve the SDK gate order even when polling without waiting. Reading
-        // Data first could consume a notification before Hold permits the copy.
-        for gate in [&connection.hold_gate, &connection.data_gate] {
-            // SAFETY: owned synchronization event handle, zero timeout.
-            match unsafe { WaitForSingleObject(gate.0, 0) } {
-                WAIT_OBJECT_0 => {}
-                WAIT_TIMEOUT => return Ok(false),
-                _ => {
-                    return Err(unavailable(
-                        "Cannot check LMU update gate",
-                        windows::core::Error::from_thread(),
-                    ));
-                }
-            }
-        }
+        // Race2Love polls at its own rate. The SDK's Hold/Data events belong to
+        // its blocking notification protocol, not a freshness counter. Zero-time
+        // polling can miss permits or consume a notification before a later
+        // acquisition fails. Read under the shared lock instead, without touching
+        // those events; LmuSource only publishes advancing player clocks.
         if connection
             .lock
             .atomic(4)
@@ -245,19 +227,6 @@ impl SnapshotReader for WindowsReader {
         connection.data.copy_to(destination);
         Ok(true)
     }
-}
-
-fn open_gate(name: PCWSTR) -> Result<OwnedHandle, TelemetryError> {
-    // SAFETY: valid terminated name, synchronization-only access to an existing
-    // event. Missing gates indicate a stopped/older/incompatible game producer.
-    unsafe { OpenEventW(SYNCHRONIZATION_SYNCHRONIZE, false, name) }
-        .map(OwnedHandle)
-        .map_err(|error| {
-            unavailable(
-                "Cannot open LMU update gate; this reader requires the current shared-memory SDK",
-                error,
-            )
-        })
 }
 
 fn find_game() -> Result<(u32, OwnedHandle), TelemetryError> {
@@ -363,8 +332,9 @@ mod tests {
     fn gates() -> (OwnedHandle, OwnedHandle) {
         let hold_name = name("HoldGate");
         let data_name = name("DataGate");
-        // SAFETY: isolated fixture names; Hold is a level gate, Data an auto-reset
-        // notification so tests detect accidental notification consumption.
+        // SAFETY: isolated fixture names; this deliberately models an unavailable
+        // Hold permit and a consumable Data notification. The real producer's
+        // reset modes are not specified by the public SDK header.
         let hold = OwnedHandle(
             unsafe { CreateEventW(None, true, false, PCWSTR(hold_name.as_ptr())) }.unwrap(),
         );
@@ -372,6 +342,72 @@ mod tests {
             unsafe { CreateEventW(None, false, true, PCWSTR(data_name.as_ptr())) }.unwrap(),
         );
         (hold, data)
+    }
+
+    #[test]
+    fn advancing_locked_data_is_readable_without_sdk_notifications() {
+        let data_name = name("PollingData");
+        let lock_name = name("PollingLock");
+        let wake_name = name("PollingWake");
+        let producer = create(&data_name, PAYLOAD_SIZE);
+        let _producer_lock = create(&lock_name, 8);
+        // SAFETY: uniquely named, test-owned notification event.
+        let wake = OwnedHandle(
+            unsafe { CreateEventW(None, false, false, PCWSTR(wake_name.as_ptr())) }.unwrap(),
+        );
+        // No Hold notification is published. This models a polling observer
+        // reading valid data independently of the SDK's notification consumer.
+        let (hold_gate, data_gate) = gates();
+        // SAFETY: current live test process, synchronization-only rights.
+        let process = OwnedHandle(
+            unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, GetCurrentProcessId()) }.unwrap(),
+        );
+        let reader = WindowsReader {
+            connection: Some(Connection {
+                process,
+                data: Mapping::open(PCWSTR(data_name.as_ptr()), FILE_MAP_READ, PAYLOAD_SIZE)
+                    .unwrap(),
+                lock: Mapping::open(
+                    PCWSTR(lock_name.as_ptr()),
+                    FILE_MAP_READ | FILE_MAP_WRITE,
+                    8,
+                )
+                .unwrap(),
+                wake,
+            }),
+        };
+        let mut source = crate::LmuSource::new(reader);
+        for elapsed in [1.0, 2.0, 3.0] {
+            let fixture = crate::tests::fixture(0, elapsed);
+            // SAFETY: synchronous test producer owns the writable mapping; no
+            // read runs concurrently with this complete synthetic update.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    fixture.as_ptr(),
+                    producer.address.Value.cast(),
+                    PAYLOAD_SIZE,
+                );
+            }
+            let frame =
+                race2love_core::telemetry::TelemetrySource::read_frame(&mut source).unwrap();
+            if elapsed == 1.0 {
+                assert!(frame.is_none(), "first clock must establish the baseline");
+            } else {
+                assert_eq!(
+                    frame
+                        .expect("advancing data must not depend on notification events")
+                        .engine_rpm,
+                    7000.0
+                );
+            }
+        }
+        // SAFETY: test-owned events. Polling telemetry must neither need the
+        // closed Hold permit nor consume Data notifications for another client.
+        assert_eq!(unsafe { WaitForSingleObject(hold_gate.0, 0) }, WAIT_TIMEOUT);
+        assert_eq!(
+            unsafe { WaitForSingleObject(data_gate.0, 0) },
+            WAIT_OBJECT_0
+        );
     }
 
     #[test]
@@ -423,40 +459,23 @@ mod tests {
         let wake = OwnedHandle(
             unsafe { OpenEventW(EVENT_MODIFY_STATE, false, PCWSTR(event_name.as_ptr())) }.unwrap(),
         );
-        let (hold_gate, data_gate) = gates();
-        let hold_handle = hold_gate.0;
-        let data_handle = data_gate.0;
         let mut reader = WindowsReader {
             connection: Some(Connection {
                 process,
                 data,
                 lock,
                 wake,
-                hold_gate,
-                data_gate,
             }),
         };
         let mut bytes = vec![0; PAYLOAD_SIZE];
-        assert!(!reader.snapshot(&mut bytes).unwrap());
-        // SAFETY: owned fixture handle. Data remains signaled because a closed
-        // Hold gate must be checked first; opening Hold now permits the copy.
-        unsafe {
-            SetEvent(hold_handle).unwrap();
-        }
+        // No Hold/Data objects exist for this fixture; the lock is sufficient
+        // to copy safely, and the source's clock determines whether it is fresh.
         assert!(reader.snapshot(&mut bytes).unwrap());
-        assert!(!reader.snapshot(&mut bytes).unwrap()); // notification consumed
-        // SAFETY: fixture producer publishes another notification.
-        unsafe {
-            SetEvent(data_handle).unwrap();
-        }
+        assert!(reader.snapshot(&mut bytes).unwrap());
         producer_lock.atomic(4).store(1, Ordering::SeqCst);
         assert!(!reader.snapshot(&mut bytes).unwrap());
         producer_lock.atomic(4).store(0, Ordering::SeqCst);
         producer_lock.atomic(0).store(1, Ordering::SeqCst);
-        // SAFETY: fixture producer publishes the next update after contention.
-        unsafe {
-            SetEvent(data_handle).unwrap();
-        }
         assert!(reader.snapshot(&mut bytes).unwrap());
         assert_eq!(producer_lock.atomic(4).load(Ordering::SeqCst), 0);
         // SAFETY: valid event handle; this checks that the reader woke a waiter.
@@ -501,7 +520,6 @@ mod tests {
         let event = OwnedHandle(
             unsafe { CreateEventW(None, false, false, PCWSTR(event_name.as_ptr())) }.unwrap(),
         );
-        let (hold_gate, data_gate) = gates();
         let mut reader = WindowsReader {
             connection: Some(Connection {
                 process,
@@ -514,8 +532,6 @@ mod tests {
                 )
                 .unwrap(),
                 wake: event,
-                hold_gate,
-                data_gate,
             }),
         };
         child.kill().unwrap();

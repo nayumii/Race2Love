@@ -223,8 +223,8 @@ Enter the car in a driving session. The adapter opens read-only telemetry and us
 the SDK lock to copy bounded snapshots; it validates the known 1.2–1.4 layout,
 selects the player, and exposes RPM/max RPM, gear, speed, throttle and brake.
 Frozen clocks cannot refresh output. Game exit is detected via a process handle;
-non-realtime/player exit clears output. The current SDK update gates are checked
-in order. See [LMU.md](docs/LMU.md) for the verified installed layout, sources and
+non-realtime/player exit clears output. Snapshots poll under the SDK lock; frame
+notification events are left untouched so they cannot starve the reader. See [LMU.md](docs/LMU.md) for the verified installed layout, sources and
 remaining live Windows acceptance.
 
 On **Linux/Proton**, enable Plugins and restart LMU, then select **Le Mans
@@ -285,8 +285,9 @@ cargo test --workspace --locked
 
 All **57 Linux tests** pass: 26 core, three GUI, 15 LMU (including nine Linux
 acquisition tests), one reconnect backoff,
-and 12 fake Remote tests. Three additional Windows-only mapping/process fixtures
-compile here and are configured to run in Windows CI. Tests cover effect logic,
+and 12 fake Remote tests. Four additional Windows-only mapping/process fixtures
+compile here and run under an isolated Wine prefix; native Windows CI is also
+configured (52 Windows tests in total). Tests cover effect logic,
 configuration, pipeline safety, GUI controls, typed discovery, targeted request
 bodies, bounded responses/timeouts, finite expiry, renewal/deduplication,
 selection changes, manual-test limits, cancellation, reconnect, toy loss,

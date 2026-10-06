@@ -1,3 +1,50 @@
+# Windows telemetry freeze correction
+
+The owner reported Race2Love showing frozen telemetry on Windows while TinyPedal
+continued to work, including with TinyPedal completely closed. The old reader
+required successful zero-timeout polls of Hold and Data notification events before
+every locked copy. This conflated notification availability with advancing data.
+
+A Windows regression fixture publishes valid, advancing player telemetry while
+its separate Hold notification stays unavailable. The old reader reproduced the
+failure: no player frame was returned. The corrected reader polls the mapping
+under the existing SDK lock without consuming either update notification. It
+retains player-clock freshness, stale-output shutdown, process-exit detection,
+read-only telemetry and contention handling.
+
+All **10 Windows LMU tests** passed under Wine 11.19 in an isolated temporary
+prefix, including the four Win32 fixtures. This executes Windows handles, mappings,
+events, lock atomics and the shared pipeline; it is stronger than a compile check,
+while remaining distinct from testing LMU on native Windows. The regression also
+checks that another client's consumable Data notification remains signaled.
+
+Formatting, Linux/Windows workspace/all-targets checks and Clippy passed. All
+**57 Linux workspace tests** passed, including fake Remote coverage. A MinGW-built
+Windows x64 release executable completed the five-second display-free Demo under
+Wine, then shut down all workers with final mock output **0.0**. The artifact uses
+the Windows GUI subsystem and imports standard Windows DLLs; no extra MinGW
+runtime DLL is required. A read-only console telemetry probe is included for
+Windows diagnostics.
+Reproduce the fixture execution from a Linux host with Wine and MinGW installed:
+
+```sh
+cargo test -p race2love-lmu --target x86_64-pc-windows-gnu --no-run --locked
+mkdir -p /tmp/race2love-windows-tests
+WINEPREFIX=/tmp/race2love-windows-tests WINEDEBUG=-all \
+  wine target/x86_64-pc-windows-gnu/debug/deps/race2love_lmu-<hash>.exe
+cargo build --release --target x86_64-pc-windows-gnu --locked
+```
+
+Use the actual hashed test executable reported by Cargo. The isolated prefix keeps
+fixtures separate from the game's Wine prefix. Tests create unique fixture names,
+not production LMU objects. All runs here used the offline cache and Cargo target
+directory under `/tmp`.
+
+Live Windows retesting of the corrected executable remains required. Sources and
+protocol distinctions are documented in [LMU.md](LMU.md); no reference code or
+proprietary SDK header was copied. Historical Phase 3/4 results below describe the
+older builds and are retained as records, including their previous gate behavior.
+
 # Phase 4 validation record
 
 Recorded 2026-10-06 on Linux x86-64, Rust/Cargo stable 1.94.1. Automated pipeline checks

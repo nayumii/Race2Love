@@ -79,13 +79,19 @@ for LMU until separately verified in Phase 6.
 payload length. Insufficient backing storage is rejected by Win32; page-rounded
 view sizes cannot distinguish four bytes of padding from larger allocations.
 
-The newly installed SDK also requires ordered update gates: check
-`LMU_Data_HoldEvent`, then `LMU_Data_DataEvent`, then acquire the lock. Both event
-checks use zero-timeout polls. A closed gate skips the sample; a notification is
-never consumed before Hold permits access. Gate handles require only SYNCHRONIZE
-rights and are never created/signaled by Race2Love. Builds predating these gate
-objects report an availability error; the decoder's 1.2–1.4 marker range does not
-imply that older Windows producers support this acquisition protocol.
+Windows snapshots are polled at the configured telemetry rate and copied under
+the SDK shared lock. Race2Love does not open, wait on, reset or signal
+`LMU_Data_HoldEvent` / `LMU_Data_DataEvent`. Those events drive the SDK's blocking
+notification example; independently polling them with zero-timeout waits can skip
+advancing data or consume a permit before a later step succeeds. Their reset modes
+are not specified by the shipped header. The earlier event-gated reader caused a
+reported Windows availability problem even with TinyPedal closed.
+
+Freshness comes from observed `(vehicle ID, mElapsedTime)` progress, not notification
+state. This permits independent readers to coexist without taking each other's
+frame notifications. TinyPedal's native LMU reader likewise polls the mapping
+without those gates; Race2Love additionally retains the shared lock for its copy.
+No unlocked fallback was added. Missing SDK lock objects still fail closed.
 
 Snapshots use existing SDK objects `LMU_SharedMemoryLockData` (eight bytes) and
 `LMU_SharedMemoryLockEvent` (auto-reset wake event). Only synchronization memory is
@@ -199,6 +205,10 @@ redistributed, and no GPL code was incorporated.
 - [Microsoft MapViewOfFile](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile)
   and [WaitForSingleObject](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject):
   rights, bounded views and nonblocking lifetime checks.
+- [Microsoft event objects](https://learn.microsoft.com/en-us/windows/win32/sync/event-objects):
+  auto-reset notifications release one waiter and can be consumed by waits; manual
+  events have different behavior. Race2Love does not assume either mode for LMU’s
+  update gates.
 - [Microsoft windows-rs releases](https://github.com/microsoft/windows-rs/releases):
   maintained `windows` 0.62.2, Windows-only with the required Win32 features.
 
@@ -206,7 +216,10 @@ Synthetic fixtures test offsets, units, player selection, malformed bytes/number
 versions, missing player/realtime, progress, freeze, player exit, game restart and
 shutdown through the actual pipeline. Windows-only fixtures create isolated named
 sections/events and a disposable process: read-only protection, contention and
-wakeup, missing/undersized mappings and process exit with a retained mapping.
+wakeup, advancing data without available frame notifications, preserving another
+client’s notification, missing/undersized mappings and process exit with retained
+mapping. The no-notification regression failed before the polling fix and passes
+after it.
 
 Linux acquisition has process/filesystem fixtures and a real `/proc` memfd test,
 plus full-pipeline freeze, player exit, process loss, reconnect and shutdown checks.
@@ -214,8 +227,10 @@ The real Linux/Proton game (marker 14200) was checked in a driving session throu
 the dashboard and read-only probe, at about 60 fresh frames/s. The owner also
 confirmed live Lovense output after Resume. Broader physical fault/latency
 acceptance remains; see the detailed validation record.
-Windows code/tests compile and pass Clippy from Linux. Executing Windows fixtures
-and testing LMU on Windows remain native Windows acceptance work. The installed SDK
+Windows code/tests compile and pass Clippy from Linux. All ten Windows LMU tests
+(including four Win32 fixtures) now execute under an isolated Wine prefix. Live
+Windows LMU and native MSVC acceptance remain required; Wine fixtures do not
+constitute a Windows game test. The installed SDK
 was verified once the owner's installation finished; all used offsets and sizes
 passed C++ static assertions targeting the Windows x64 ABI. See
 [VALIDATION.md](VALIDATION.md) for exact status. Live acceptance: compare headers,
