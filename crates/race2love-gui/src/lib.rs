@@ -84,7 +84,7 @@ impl Race2LoveApp {
     fn header(&mut self, ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
         ui.horizontal_wrapped(|ui| {
             ui.heading("Race2Love");
-            ui.label("Phase 4 · Windows & Proton LMU telemetry");
+            ui.label("Phase 5 · LMU → RPM / shifts → Lovense");
             ui.separator();
             for (page, title) in [
                 (Page::Dashboard, "Dashboard"),
@@ -324,6 +324,11 @@ impl Race2LoveApp {
             ));
         });
         ui.small("Adjacent forward gears generate pulses. Neutral, reverse and reconnects do not.");
+        ui.small(format!(
+            "Output updates at {} Hz. Pulses shorter than {:.0} ms may be missed.",
+            self.config.output.update_hz,
+            1000.0 / f64::from(self.config.output.update_hz)
+        ));
         ui.separator();
         ui.heading("Further effects · Phase 6");
         ui.label(

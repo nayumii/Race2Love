@@ -52,9 +52,10 @@ struct ActiveEffect {
     started: Instant,
 }
 
-/// Maximum transient count is fixed. Lower-priority effects are attenuated by
-/// 1/(1 + priority_distance/64), then combined as 1-product(1-intensity).
-/// The highest active priority keeps full strength and output cannot clip.
+/// Maximum transient count is fixed. Each priority layer soft-mixes its effects
+/// with attenuated lower layers. The largest layer output wins, so a higher
+/// priority pulse can add strength without reducing the existing background.
+/// No sample-time allocation is needed and output cannot clip.
 pub struct EffectMixer {
     active: Vec<ActiveEffect>,
 }
@@ -120,16 +121,24 @@ impl EffectMixer {
                     )
                 }))
         };
-        let highest = samples()
+        samples()
             .filter(|(intensity, _)| *intensity > 0.0)
             .map(|(_, priority)| priority)
-            .max()
-            .unwrap_or(0);
-        let remaining = samples().fold(1.0, |remaining, (intensity, priority)| {
-            let weight = 1.0 / (1.0 + f32::from(highest.saturating_sub(priority)) / 64.0);
-            remaining * (1.0 - intensity * weight)
-        });
-        unit(1.0 - remaining)
+            .fold(0.0_f32, |mixed, layer| {
+                let combined = samples().filter(|(_, priority)| *priority <= layer).fold(
+                    0.0,
+                    |combined, (intensity, priority)| {
+                        let weight = 1.0 / (1.0 + f32::from(layer - priority) / 64.0);
+                        // Equivalent to 1-product(1-intensity*weight), without
+                        // subtracting a small single effect from 1 twice. That
+                        // cancellation can lose a device step during flooring.
+                        combined + (1.0 - combined) * intensity * weight
+                    },
+                );
+                // Preserve lower layers throughout a pulse's attack/release,
+                // including their combined strength rather than just one effect.
+                mixed.max(unit(combined))
+            })
     }
 }
 
@@ -168,6 +177,24 @@ mod tests {
             ..effect
         };
         assert_eq!(held.sample(Duration::ZERO), 0.8);
+    }
+
+    #[test]
+    fn single_effect_preserves_exact_intensity_at_device_step_boundaries() {
+        let now = Instant::now();
+        let mut mixer = EffectMixer::default();
+        for intensity in [0.01, 0.05, 0.1, 0.2, 0.4, 0.8, 1.0] {
+            assert_eq!(
+                mixer.sample(
+                    &[ContinuousEffect {
+                        intensity,
+                        priority: 20,
+                    }],
+                    now,
+                ),
+                intensity
+            );
+        }
     }
 
     #[test]
@@ -212,6 +239,95 @@ mod tests {
             ),
             1.0
         );
+    }
+
+    #[test]
+    fn a_new_priority_layer_cannot_reduce_existing_effects() {
+        let now = Instant::now();
+        let mut mixer = EffectMixer::default();
+        let background = [
+            ContinuousEffect {
+                intensity: 0.6,
+                priority: 20,
+            },
+            ContinuousEffect {
+                intensity: 0.6,
+                priority: 20,
+            },
+        ];
+        let baseline = mixer.sample(&background, now);
+        let with_pulse = [
+            background[0],
+            background[1],
+            ContinuousEffect {
+                intensity: 0.01,
+                priority: 160,
+            },
+        ];
+        assert!(mixer.sample(&with_pulse, now) >= baseline);
+    }
+
+    #[test]
+    fn shift_envelope_preserves_engine_baseline_and_has_no_edge_dips() {
+        let now = Instant::now();
+        let mut mixer = EffectMixer::default();
+        let engine = [ContinuousEffect {
+            intensity: 0.65,
+            priority: 20,
+        }];
+        let baseline = mixer.sample(&engine, now);
+        mixer.push(pulse(160), now);
+        let mut previous = baseline;
+        for milliseconds in 0..=100 {
+            let output = mixer.sample(&engine, now + Duration::from_millis(milliseconds));
+            assert!(
+                output >= baseline,
+                "pulse reduced the engine at {milliseconds} ms"
+            );
+            assert!(output <= 1.0);
+            if milliseconds <= 60 {
+                assert!(output >= previous, "attack/hold must not drop");
+            } else {
+                assert!(output <= previous, "release must not increase");
+            }
+            previous = output;
+        }
+        assert_eq!(previous, baseline);
+        assert_eq!(mixer.active_count(), 0);
+    }
+
+    #[test]
+    fn saturated_mixer_rejects_lower_priority_and_accepts_higher_priority() {
+        let now = Instant::now();
+        let mut mixer = EffectMixer::default();
+        for _ in 0..EffectMixer::MAX_TRANSIENTS {
+            mixer.push(
+                HapticEffect {
+                    intensity: 0.025,
+                    ..pulse(160)
+                },
+                now,
+            );
+        }
+        let sample_at = now + Duration::from_millis(30);
+        let baseline = mixer.sample(&[], sample_at);
+        mixer.push(
+            HapticEffect {
+                intensity: 1.0,
+                ..pulse(20)
+            },
+            now,
+        );
+        assert_eq!(mixer.sample(&[], sample_at), baseline);
+        mixer.push(
+            HapticEffect {
+                intensity: 1.0,
+                ..pulse(200)
+            },
+            now,
+        );
+        assert_eq!(mixer.sample(&[], sample_at), 1.0);
+        assert_eq!(mixer.active_count(), EffectMixer::MAX_TRANSIENTS);
     }
 
     #[test]

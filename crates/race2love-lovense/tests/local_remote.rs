@@ -7,9 +7,10 @@ use std::{
 };
 
 use race2love_core::{
-    config::{Config, LocalProtocol, LovenseConfig},
+    config::{Config, EngineConfig, LocalProtocol, LovenseConfig},
     devices::{DeviceError, HapticDevice},
-    runtime::RaceRuntime,
+    effects::ResponseCurve,
+    runtime::{RaceRuntime, StopReason},
     telemetry::{DemoSource, TelemetryError, TelemetryFrame, TelemetrySource},
 };
 use race2love_lovense::{
@@ -19,6 +20,7 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
+    sync::watch,
     task::{JoinHandle, JoinSet},
     time::Instant,
 };
@@ -276,6 +278,36 @@ impl TelemetrySource for ConstantSource {
     }
 }
 
+/// Hold RPM/gear steady while publishing fresh observations. None deliberately
+/// freezes the source, retaining the last observation's original timestamp.
+struct ControlledSource {
+    input: watch::Receiver<Option<(f32, i8)>>,
+}
+
+impl TelemetrySource for ControlledSource {
+    fn name(&self) -> &'static str {
+        "Controlled normalized telemetry"
+    }
+    fn connect(&mut self) -> Result<(), TelemetryError> {
+        Ok(())
+    }
+    fn disconnect(&mut self) {}
+    fn is_connected(&self) -> bool {
+        true
+    }
+    fn read_frame(&mut self) -> Result<Option<TelemetryFrame>, TelemetryError> {
+        Ok(self
+            .input
+            .borrow()
+            .map(|(engine_rpm, gear)| TelemetryFrame {
+                engine_rpm,
+                engine_max_rpm: 10_000.0,
+                gear,
+                ..Default::default()
+            }))
+    }
+}
+
 #[test]
 fn typed_discovery_rejects_malformed_fields_and_preserves_unavailable_capabilities() {
     let toys = State::default().toys;
@@ -486,6 +518,147 @@ async fn full_pipeline_renews_duplicates_stops_and_shuts_down() {
     runtime.shutdown().await;
     assert_eq!(remote.active("b"), 0);
     service.shutdown().await;
+    assert_eq!(remote.records().last().unwrap().body["action"], "Stop");
+}
+
+#[tokio::test]
+async fn rpm_shift_pipeline_applies_live_settings_and_clears_pulses_on_timeout() {
+    let remote = FakeRemote::start().await;
+    let service = connect(&remote).await;
+    let (frames, input) = watch::channel(Some((5_000.0, 3)));
+    let mut config = Config::default();
+    config.effects.engine = EngineConfig {
+        start_ratio: 0.2,
+        end_ratio: 0.8,
+        min_intensity: 0.0,
+        max_intensity: 0.8,
+        ..EngineConfig::default()
+    };
+    config.effects.gear_shift.attack_ms = 20;
+    config.effects.gear_shift.hold_ms = 200;
+    config.effects.gear_shift.release_ms = 80;
+    let runtime = RaceRuntime::spawn(
+        Box::new(ControlledSource { input }),
+        service.device.clone(),
+        config.clone(),
+    )
+    .unwrap();
+    wait_for(|| {
+        let snapshot = runtime.control.snapshot();
+        snapshot.device.connected && snapshot.controls.emergency_stopped
+    })
+    .await;
+    assert_eq!(remote.vibrations(), 0);
+    runtime.control.resume();
+    // Halfway through the RPM window: 0.4 mixed * 0.5 global = Lovense step 4.
+    wait_for(|| remote.active("b") == 4).await;
+    frames.send_replace(Some((1_000.0, 3)));
+    wait_for(|| remote.active("b") == 0).await;
+    frames.send_replace(Some((8_000.0, 3)));
+    wait_for(|| remote.active("b") == 8).await;
+    frames.send_replace(Some((5_000.0, 3)));
+    wait_for(|| remote.active("b") == 4).await;
+    for (curve, expected_step) in [
+        (ResponseCurve::Exponential, 2),
+        (ResponseCurve::Logarithmic, 5),
+        (ResponseCurve::Linear, 4),
+    ] {
+        config.effects.engine.curve = curve;
+        runtime.control.update_config(config.clone()).unwrap();
+        wait_for(|| remote.active("b") == expected_step).await;
+    }
+
+    let shifts_begin = remote.records().len();
+    for gear in [4, 3] {
+        frames.send_replace(Some((5_000.0, gear)));
+        // Up/downshifts add a higher-priority pulse, then return to engine output.
+        wait_for(|| remote.active("b") == 9).await;
+        wait_for(|| remote.active("b") == 4).await;
+    }
+    assert!(remote.records()[shifts_begin..].iter().all(|record| {
+        record.body["action"]
+            .as_str()
+            .and_then(|action| action.strip_prefix("Vibrate:"))
+            .is_none_or(|step| (4..=9).contains(&step.parse::<u8>().unwrap()))
+    }));
+
+    frames.send_replace(Some((5_000.0, 4)));
+    wait_for(|| remote.active("b") == 9).await;
+    config.effects.gear_shift.enabled = false;
+    runtime.control.update_config(config.clone()).unwrap();
+    wait_for(|| remote.active("b") == 4).await;
+    let reenabled_at = remote.records().len();
+    config.effects.gear_shift.enabled = true;
+    runtime.control.update_config(config.clone()).unwrap();
+    tokio::time::sleep(Duration::from_millis(320)).await;
+    assert_eq!(remote.active("b"), 4);
+    assert!(remote.records()[reenabled_at..].iter().all(|record| {
+        record.body["action"]
+            .as_str()
+            .is_none_or(|action| !action.starts_with("Vibrate:") || action == "Vibrate:4")
+    }));
+
+    config.output.global_intensity = 0.25;
+    runtime.control.update_config(config.clone()).unwrap();
+    wait_for(|| remote.active("b") == 2).await;
+    config.output.global_intensity = 1.0;
+    config.output.max_intensity = 0.32;
+    runtime.control.update_config(config.clone()).unwrap();
+    // Downward quantization must honor a ceiling that is not a native step.
+    wait_for(|| remote.active("b") == 6).await;
+    let capped_at = remote.records().len();
+    frames.send_replace(Some((5_000.0, 5)));
+    wait_for(|| runtime.control.snapshot().effects.mixed > 0.9).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(remote.active("b"), 6);
+    assert!(remote.records()[capped_at..].iter().all(|record| {
+        record.body["action"]
+            .as_str()
+            .and_then(|action| action.strip_prefix("Vibrate:"))
+            .is_none_or(|step| step.parse::<u8>().unwrap() <= 6)
+    }));
+
+    config.effects.gear_shift.enabled = false;
+    config.output.global_intensity = 0.0;
+    runtime.control.update_config(config.clone()).unwrap();
+    wait_for(|| remote.active("b") == 0).await;
+    config.effects.gear_shift.enabled = true;
+    config.effects.gear_shift.hold_ms = 1_000;
+    config.output.global_intensity = 0.5;
+    config.output.max_intensity = 0.75;
+    runtime.control.update_config(config).unwrap();
+    wait_for(|| remote.active("b") == 4).await;
+    frames.send_replace(Some((5_000.0, 6)));
+    wait_for(|| remote.active("b") == 9).await;
+    frames.send_replace(None);
+    // A pulse still holding must stop on the 250 ms telemetry deadline.
+    wait_for(|| {
+        runtime.control.snapshot().effects.reason == StopReason::StaleTelemetry
+            && remote.active("b") == 0
+    })
+    .await;
+    assert_eq!(
+        remote
+            .records()
+            .iter()
+            .rev()
+            .find(|record| record.body["command"] == "Function")
+            .unwrap()
+            .body["action"],
+        "Stop"
+    );
+    let recovered_at = remote.records().len();
+    frames.send_replace(Some((5_000.0, 1)));
+    wait_for(|| remote.active("b") == 4).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(remote.records()[recovered_at..].iter().all(|record| {
+        record.body["action"]
+            .as_str()
+            .is_none_or(|action| !action.starts_with("Vibrate:") || action == "Vibrate:4")
+    }));
+    runtime.shutdown().await;
+    service.shutdown().await;
+    assert_eq!(remote.active("b"), 0);
     assert_eq!(remote.records().last().unwrap().body["action"], "Stop");
 }
 
