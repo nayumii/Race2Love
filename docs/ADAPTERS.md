@@ -65,6 +65,39 @@ The only added direct dependency is test-only `rustix` for safe memfd creation;
 production Linux acquisition uses the standard library. Reference code was not
 copied. See [VALIDATION.md](VALIDATION.md) for live acceptance status.
 
+## Phase 5: RPM / gear effects to Lovense
+
+Windows LMU, Proton LMU and Demo feed the same normalized effect engine. Engine
+vibration maps `rpm / max_rpm` through the configurable start/end window, then
+interpolates minimum/maximum intensity using linear, exponential (`x²`) or
+logarithmic (`log10(1 + 9x)`) response. Invalid RPM/max RPM fails closed.
+
+Adjacent forward up/downshifts create independent attack/hold/release pulses.
+First samples, neutral/reverse, duplicate observations and skipped gears do not
+trigger pulses. Stop, telemetry loss and source switching reset detection and
+clear envelopes. Disabling gear shifts also clears an active pulse immediately.
+Engine/shift priorities are 20/160. The bounded mixer preserves the existing
+background while adding higher-priority pulses; see [ARCHITECTURE.md](ARCHITECTURE.md)
+for the exact formula and precision handling. Global scaling and the absolute
+output ceiling apply after mixing, before backend-specific downward quantization.
+
+The Effects page applies valid settings live. Defaults retain 60 Hz telemetry
+and envelope updates, 25 Hz positive device output and a 10/70/60 ms shift envelope
+(140 ms total). Short pulses may fall between the device's 40 ms updates; the UI
+shows the configured interval. Duplicate device levels are suppressed, except
+finite-lease renewals. Stops bypass throttling and stale telemetry stops output
+after 250 ms by default. No production dependency or game-specific effect is added.
+
+Regression tests cover engine baseline preservation throughout a pulse, combined
+background layers, priority saturation and exact single-effect values at device
+steps. A controlled normalized source exercises the actual runtime and loopback
+Lovense backend: RPM thresholds, all curves, up/downshifts, live pulse cancellation,
+global scaling, a non-step output ceiling, zero intensity, timeout during a held
+pulse, recovery without replay and shutdown. It uses synthetic frames, not a
+physical device. The owner has reported the live pipeline working on Proton and
+the corrected Windows telemetry build working; detailed fault/latency acceptance
+remains in [VALIDATION.md](VALIDATION.md).
+
 ## Phase 6: Additional signals
 
 Every generator must document its exact verified LMU signal and normalization.

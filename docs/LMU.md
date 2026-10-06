@@ -229,8 +229,9 @@ confirmed live Lovense output after Resume. Broader physical fault/latency
 acceptance remains; see the detailed validation record.
 Windows code/tests compile and pass Clippy from Linux. All ten Windows LMU tests
 (including four Win32 fixtures) now execute under an isolated Wine prefix. Live
-Windows LMU and native MSVC acceptance remain required; Wine fixtures do not
-constitute a Windows game test. The installed SDK
+The owner subsequently confirmed the corrected build works on native Windows.
+Detailed Windows fault/latency acceptance and native MSVC build validation remain;
+Wine fixtures alone do not constitute a Windows game test. The installed SDK
 was verified once the owner's installation finished; all used offsets and sizes
 passed C++ static assertions targeting the Windows x64 ABI. See
 [VALIDATION.md](VALIDATION.md) for exact status. Live acceptance: compare headers,

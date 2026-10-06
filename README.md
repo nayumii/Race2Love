@@ -6,12 +6,14 @@ Ultimate → Lovense Remote/Game Mode**, on Linux with Steam/Proton and Windows
 10/11. The design uses no SimHub, Electron, browser frontend, or mandatory cloud
 service.
 
-**Phase 4 implementation:** the application starts with **Demo telemetry** and an
+**Phase 5 implementation:** the application starts with **Demo telemetry** and an
 **in-memory mock device**. The local Lovense backend is available through an
 explicit Connect and toy selection. **Direct Windows and Proton LMU** is selectable on
 Dashboard or with `--lmu`. The owner reports
-successful Lovense hardware testing and live Proton LMU output after Resume. See [validation status](docs/VALIDATION.md)
-for automated checks, live Linux telemetry verification and remaining acceptance.
+successful Lovense hardware testing, live Proton LMU output after Resume, and the
+corrected Windows build working. RPM/gear effects, the priority mixer and global
+scaling share one pipeline across both platforms. See [validation status](docs/VALIDATION.md)
+for automated checks, live telemetry reports and remaining acceptance.
 
 ## Try Demo
 
@@ -145,8 +147,10 @@ An adjacent forward gear change creates an attack/hold/release pulse. Neutral,
 reverse, first samples, skipped gears, and reconnect/reset samples do not trigger
 normal shift pulses. Engine priority is 20 and shift priority is 160.
 
-The mixer gives the highest active priority full strength, attenuates lower
-priorities, and combines using a bounded soft sum. At most 16 transient effects
+The mixer combines priority layers using a bounded soft sum, preserving the
+engine background throughout higher-priority pulse envelopes. A pulse cannot
+reduce existing engine vibration simply by becoming active. Single-effect levels
+also retain their precision at device step boundaries. At most 16 transient effects
 are retained. The global multiplier applies **after mixing**, followed by an
 independent absolute intensity ceiling. All output is normalized to `0..=1`.
 
@@ -160,7 +164,7 @@ and CPU/latency still require measurement.
 
 Demo simulates a 24-second driving cycle with RPM ramps, up/downshifts, braking,
 slip, kerbs, and occasional explicit impacts. Slip, suspension velocity, vertical
-acceleration, and impact signals are **synthetic debug values only** in Phase 1.
+acceleration, and impact signals are **synthetic debug values only** through Phase 5.
 They do not drive additional effects yet. No rolling graph history is stored.
 
 ## Configuration and logging
@@ -283,15 +287,18 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-All **57 Linux tests** pass: 26 core, three GUI, 15 LMU (including nine Linux
+All **62 Linux tests** pass: 30 core, three GUI, 15 LMU (including nine Linux
 acquisition tests), one reconnect backoff,
-and 12 fake Remote tests. Four additional Windows-only mapping/process fixtures
+and 13 fake Remote tests. Four additional Windows-only mapping/process fixtures
 compile here and run under an isolated Wine prefix; native Windows CI is also
-configured (52 Windows tests in total). Tests cover effect logic,
+configured (57 Windows tests in total). Tests cover effect logic,
 configuration, pipeline safety, GUI controls, typed discovery, targeted request
 bodies, bounded responses/timeouts, finite expiry, renewal/deduplication,
 selection changes, manual-test limits, cancellation, reconnect, toy loss,
-persistent Stop failures, and shutdown. Linux tests cover process/prefix discovery,
+persistent Stop failures, and shutdown. The Phase 5 integration test checks live
+RPM curves, up/downshift pulses, scaling/ceiling changes and telemetry loss during
+a held pulse through the real Lovense backend with a loopback fake Remote.
+Linux tests cover process/prefix discovery,
 PID/fd reuse, memfd reads, truncation, inconsistent snapshots and recovery. No real
 LMU or toy is required.
 
@@ -299,13 +306,15 @@ LMU or toy is required.
 Linux and platform compile checks. GitHub CI checks Linux and native Windows/MSVC
 on push and pull requests; the new workflow has not run in this local session.
 
-**Next step (Phase 5 acceptance):** the live Proton LMU → RPM/gear effects →
-mixer → Lovense path now works, confirmed by the owner. Check physical Stop during
-pause/game exit, reconnect and shutdown, then tune defaults/latency before adding
-Phase 6 signals. The RPM/shift generators, global scaling and mixer are implemented.
+**Next step (Phase 6):** verify and normalize the SDK's available wheel/road/impact
+signals, implement effects only for reliable telemetry, and add bounded live
+graphs for tuning. The first LMU → RPM/gear effects → mixer → Lovense pipeline is
+implemented for Windows and Proton. Physical fault checks during game exit,
+device reconnect and shutdown, plus latency/default tuning, remain separate
+acceptance work.
 
-Known limits: native Windows LMU/MSVC execution and native Wayland runtime checks
-remain; broader Lovense hardware/fault acceptance is unrecorded; no slip,
+Known limits: native MSVC build validation and native Wayland runtime checks
+remain; broader Windows/Lovense fault acceptance is unrecorded; no slip,
 kerb, collision effects, graphs, tray, autostart, or named profiles. CPU usage and
 end-to-end latency have not been benchmarked.
 

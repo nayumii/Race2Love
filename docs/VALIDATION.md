@@ -1,3 +1,53 @@
+# Phase 5 validation record
+
+Recorded 2026-10-06 on Linux x86-64, Rust/Cargo stable 1.94.1. The owner confirmed
+the corrected Windows executable works, following the earlier live Proton and
+Lovense success reports. That confirmation is a user-reported live result;
+Windows toy/Remote versions and detailed physical fault/latency checks were not
+recorded. Phase 5 retains the existing adapters and timing defaults.
+
+Formatting, Linux/Windows GNU workspace/all-targets checks and Clippy with
+`-D warnings` passed. All **62 Linux workspace tests** passed: 30 core, three GUI,
+15 LMU, one Lovense backoff and 13 fake Remote tests. No new dependency,
+configuration migration, telemetry layout change or proprietary data is included.
+
+All **57 Windows test cases** also passed as MinGW-built Windows executables
+under Wine 11.19 in an isolated temporary prefix: 30 core, three GUI, ten LMU
+(including four Win32 fixtures), one Lovense backoff and 13 fake Remote tests.
+This includes the new Phase 5 integration test and all existing fault tests. Wine
+execution complements the owner's native Windows confirmation; it is not a
+native MSVC or detailed physical hardware test. All builds/tests used the locked
+offline cache and Cargo target directory under `/tmp`.
+
+The native Linux executable completed a five-second display-free Demo with fresh
+gear/RPM, nonzero mixed/mock output and final output **0.0** after awaited shutdown.
+
+Three regression tests reproduced two mixer problems before correction: a weak
+high-priority pulse suppressed existing vibration (including combined background
+effects), and subtractive soft mixing lost precision at native device steps.
+The corrected mixer preserves each priority layer's background, evaluates the
+same bounded soft sum without subtractive cancellation, and allocates no memory
+per sample. Tests now preserve baseline throughout attack/hold/release, exact
+single-effect levels and the existing priority strength/clamping behavior. A
+fourth new core test covers priority admission when the 16-transient capacity is
+full.
+
+The new end-to-end test uses a controllable normalized telemetry source, the
+actual runtime/effect engine/mixer and the real Lovense backend against a
+loopback-only fake Remote. It checks below-threshold/end RPM behavior, all three
+curves, up/downshift pulses without baseline dips, disabling/re-enabling a pulse,
+global scaling and zero, a 32% ceiling floored to Lovense step 6, telemetry timeout
+during a one-second held shift, recovery without replay and final shutdown Stop.
+It commands no physical device. Existing LMU fixtures separately verify decoding
+and source loss/restart through the shared pipeline.
+
+The GUI identifies Phase 5 and shows the output interval when configuring short
+shift pulses. The default 140 ms envelope and 25 Hz output cap are unchanged;
+pulses shorter than the configured output interval can be missed. Broader
+physical fault acceptance, native MSVC build validation, Wayland runtime checks
+and CPU/latency measurements remain separate work. Phase 6 begins by verifying
+reliable wheel/road/impact signals before implementing their generators/graphs.
+
 # Windows telemetry freeze correction
 
 The owner reported Race2Love showing frozen telemetry on Windows while TinyPedal
@@ -40,8 +90,9 @@ fixtures separate from the game's Wine prefix. Tests create unique fixture names
 not production LMU objects. All runs here used the offline cache and Cargo target
 directory under `/tmp`.
 
-Live Windows retesting of the corrected executable remains required. Sources and
-protocol distinctions are documented in [LMU.md](LMU.md); no reference code or
+The owner subsequently confirmed the corrected executable works on Windows.
+Detailed physical fault/latency checks remain unrecorded. Sources and protocol
+distinctions are documented in [LMU.md](LMU.md); no reference code or
 proprietary SDK header was copied. Historical Phase 3/4 results below describe the
 older builds and are retained as records, including their previous gate behavior.
 

@@ -62,10 +62,16 @@ release and a private start time. Expired envelopes are removed each sample.
 When capacity is full, a new equal/higher priority transient replaces a lowest
 priority transient; a lower priority incoming effect is rejected.
 
-For each active effect, weight is
-`1 / (1 + (highest_active_priority - priority) / 64)`.
-The mixer computes `1 - product(1 - intensity * weight)`. Effects at the highest
-priority retain full strength; others are attenuated. The result is clamped,
+For each active priority layer `p`, include effects with priority `q <= p`,
+weighted by `1 / (1 + (p - q) / 64)`. Within that layer, the soft sum is
+`1 - product(1 - intensity * weight)`. The implementation accumulates the
+equivalent `combined += (1 - combined) * intensity * weight`, preserving exact
+single-effect intensities instead of losing a device step to subtraction rounding.
+The largest layer output wins. Each layer retains its full strength and may add
+attenuated lower effects; a weak higher-priority pulse cannot suppress the
+existing background during attack or release. This also preserves a background
+made of multiple combined effects. Sampling allocates no memory.
+The result is clamped,
 multiplied by global intensity, then capped by maximum intensity. Non-finite
 values fail closed to zero. Each backend supplies downward quantization: 1% for the mock and 5% for Lovense.
 The gate compares the quantized result. Backends can request a refresh interval;
@@ -127,6 +133,12 @@ forbid unsafe code. See [LMU.md](LMU.md) for packing, offsets, locking, version 
 and live acceptance work. Phase 4 implements read-only Proton acquisition through
 `/proc`, with process/fd identity checks and repeated field reads; the Linux module
 uses only safe standard-library I/O.
+
+Phase 5 completes the shared RPM/gear pipeline for both adapters. Engine RPM uses
+the configured ratio window and response curve; adjacent forward shifts create
+priority-160 envelopes over the priority-20 engine background. Live valid settings
+apply without restarting workers. Global scaling and the output ceiling remain
+after mixing; device quantization and lease renewal remain backend concerns.
 
 Phase 6 adds generators for verified slip/road/impact signals and bounded rolling
 graphs. It does not introduce those algorithms into the telemetry adapter or
