@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/race2love-core", "crates/race2love-gui", "crates/race2love-lovense"]
+members = ["crates/race2love-core", "crates/race2love-gui", "crates/race2love-lovense", "crates/race2love-lmu"]
 resolver = "2"
 
 [workspace.package]
@@ -12,6 +12,9 @@ publish = false
 race2love-core = { path = "crates/race2love-core" }
 race2love-gui = { path = "crates/race2love-gui" }
 race2love-lovense = { path = "crates/race2love-lovense" }
+race2love-lmu = { path = "crates/race2love-lmu" }
+# Maintained Microsoft bindings, enabled only in the Windows telemetry adapter.
+windows = { version = "0.62.2", default-features = false, features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Security"] }
 # 0.34 supports Rust 1.92; 0.36 requires 1.95. Glow avoids the larger wgpu stack.
 eframe = { version = "0.34.3", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
 serde = { version = "1", features = ["derive"] }
@@ -41,6 +44,7 @@ gui = ["dep:race2love-gui"]
 [dependencies]
 race2love-core.workspace = true
 race2love-lovense.workspace = true
+race2love-lmu.workspace = true
 race2love-gui = { workspace = true, optional = true }
 tokio.workspace = true
 tracing.workspace = true

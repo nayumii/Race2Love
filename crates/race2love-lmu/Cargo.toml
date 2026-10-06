@@ -1,0 +1,26 @@
+[package]
+name = "race2love-lmu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Native LMU telemetry with a platform-independent byte decoder"
+
+[dependencies]
+race2love-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+# Only windows.rs may opt into unsafe Win32 mapping access. The decoder remains safe.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"

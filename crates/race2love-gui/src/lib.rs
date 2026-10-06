@@ -8,7 +8,8 @@ use race2love_core::{
     config::{Config, LocalProtocol},
     devices::HapticDevice,
     effects::ResponseCurve,
-    runtime::{RuntimeControl, RuntimeSnapshot, StopReason},
+    runtime::{RuntimeControl, RuntimeSnapshot, StopReason, telemetry_is_fresh},
+    telemetry::DemoSource,
     unit,
 };
 use race2love_lovense::{ConnectionState, LovenseControl};
@@ -83,7 +84,7 @@ impl Race2LoveApp {
     fn header(&mut self, ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
         ui.horizontal_wrapped(|ui| {
             ui.heading("Race2Love");
-            ui.label("Phase 2 · Demo telemetry");
+            ui.label("Phase 3 · Native LMU telemetry");
             ui.separator();
             for (page, title) in [
                 (Page::Dashboard, "Dashboard"),
@@ -126,19 +127,49 @@ impl Race2LoveApp {
 
     fn dashboard(&mut self, ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
         ui.heading("Telemetry & output");
-        ui.label("Tune racing effects with synthetic Demo telemetry.");
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Telemetry source:");
+            if ui
+                .selectable_label(snapshot.telemetry.source_name == "Demo", "Demo")
+                .clicked()
+            {
+                self.control
+                    .select_source(|| Box::new(DemoSource::default()));
+            }
+            if ui
+                .add_enabled(
+                    cfg!(windows),
+                    egui::Button::selectable(
+                        snapshot.telemetry.source_name == "Le Mans Ultimate",
+                        "Le Mans Ultimate",
+                    ),
+                )
+                .clicked()
+            {
+                self.control.select_source(race2love_lmu::native_source);
+            }
+        });
+        if !cfg!(windows) {
+            ui.small("LMU under Linux/Proton arrives in Phase 4. Demo remains available.");
+        }
+        let fresh = snapshot.telemetry.connected
+            && telemetry_is_fresh(
+                snapshot.telemetry.frame.as_ref(),
+                std::time::Instant::now(),
+                Duration::from_millis(self.config.output.telemetry_timeout_ms),
+            );
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             indicator(
                 ui,
                 snapshot.telemetry.connected,
-                &format!("{} telemetry", snapshot.telemetry.source_name),
+                &format!("{} connection", snapshot.telemetry.source_name),
             );
+            indicator(ui, fresh, "Fresh player telemetry");
             indicator(ui, snapshot.device.connected, &snapshot.device.name);
-            indicator(ui, false, "LMU · Phase 3 / 4");
         });
         let mut enabled = snapshot.controls.source_enabled;
-        if ui.checkbox(&mut enabled, "Run Demo telemetry").changed() {
+        if ui.checkbox(&mut enabled, "Run telemetry").changed() {
             self.control.set_source_enabled(enabled);
         }
         if let Some(error) = &snapshot.telemetry.error {
@@ -148,7 +179,7 @@ impl Race2LoveApp {
             ui.colored_label(egui::Color32::LIGHT_RED, error);
         }
         ui.separator();
-        if let Some(frame) = &snapshot.telemetry.frame {
+        if let Some(frame) = snapshot.telemetry.frame.as_ref().filter(|_| fresh) {
             egui::Grid::new("telemetry_values")
                 .num_columns(2)
                 .spacing([24.0, 10.0])
@@ -186,7 +217,7 @@ impl Race2LoveApp {
             meter(ui, "Throttle", frame.throttle);
             meter(ui, "Brake", frame.brake);
         } else {
-            ui.label("Demo is paused or waiting for its first sample.");
+            ui.label("Telemetry is paused, unavailable or waiting for fresh player samples.");
         }
         ui.add_space(12.0);
         meter(ui, "Mixed effects", snapshot.effects.mixed);
@@ -199,7 +230,7 @@ impl Race2LoveApp {
         {
             ui.small("Lovense output controls the selected toy. Commands expire without renewal.");
         } else {
-            ui.small("Demo output is an in-memory value. It does not command a physical device.");
+            ui.small("Mock output is an in-memory value. Connect Lovense in Devices / Settings for physical output.");
         }
         ui.separator();
         percentage_slider(
@@ -216,7 +247,7 @@ impl Race2LoveApp {
         );
         if self.config.ui.show_debug {
             ui.separator();
-            ui.label("Normalized signals · synthetic Demo data");
+            ui.label("Normalized signals · optional values remain unavailable unless verified");
             if let Some(frame) = &snapshot.telemetry.frame {
                 ui.monospace(format!(
                     "Sample age: {} ms",
@@ -745,7 +776,7 @@ mod tests {
         assert_eq!(Config::load(&path).unwrap(), app.config);
         assert!(!app.dirty);
         ui.click(&mut app, "Dashboard");
-        ui.click(&mut app, "Run Demo telemetry");
+        ui.click(&mut app, "Run telemetry");
         wait_for(|| !runtime.control.snapshot().telemetry.connected).await;
         assert_eq!(device.intensity(), 0.0);
         ui.render(
@@ -799,5 +830,72 @@ mod tests {
         runtime.shutdown().await;
         service.shutdown().await;
         assert_eq!(demo.intensity(), 0.0);
+    }
+
+    #[tokio::test]
+    async fn dashboard_shows_normalized_lmu_values_and_demo_selection_latches_stop() {
+        use race2love_core::telemetry::{MockTelemetrySource, TelemetryFrame};
+        let device = Arc::new(MockDevice::default());
+        let mut config = Config::default();
+        config.output.telemetry_timeout_ms = 2_000;
+        let runtime = RaceRuntime::spawn(
+            Box::new(MockTelemetrySource::with_frame(TelemetryFrame {
+                speed_mps: 50.0,
+                engine_rpm: 7_000.0,
+                engine_max_rpm: 8_000.0,
+                gear: 4,
+                throttle: 0.75,
+                brake: 0.125,
+                car: Some("Fixture GT3".into()),
+                session: Some("Race · Spa".into()),
+                ..TelemetryFrame::default()
+            })),
+            device.clone(),
+            config.clone(),
+        )
+        .unwrap();
+        let mut app = Race2LoveApp::new(runtime.control.clone(), config, None, None);
+        let mut ui = TestUi::new();
+        wait_for(|| runtime.control.snapshot().telemetry.frame.is_some()).await;
+        let output = ui.render(&mut app, vec![]);
+        let labels: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| {
+                if let egui::epaint::Shape::Text(text) = &shape.shape {
+                    Some(text.galley.job.text.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for expected in [
+            "Fixture GT3",
+            "Race · Spa",
+            "180 km/h  (50.0 m/s)",
+            "7000 / 8000 RPM",
+            "4",
+            "Throttle · 75%",
+            "Brake · 12%",
+        ] {
+            assert!(
+                labels.iter().any(|label| label == expected),
+                "missing displayed value: {expected}; {labels:?}"
+            );
+        }
+        ui.click(&mut app, "Demo");
+        wait_for(|| runtime.control.snapshot().telemetry.source_name == "Demo").await;
+        assert!(runtime.control.snapshot().controls.emergency_stopped);
+        wait_for(|| device.intensity() == 0.0).await;
+        #[cfg(not(windows))]
+        {
+            let generation = runtime.control.snapshot().controls.source_generation;
+            ui.click(&mut app, "Le Mans Ultimate");
+            assert_eq!(
+                runtime.control.snapshot().controls.source_generation,
+                generation
+            );
+        }
+        runtime.shutdown().await;
     }
 }

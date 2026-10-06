@@ -7,7 +7,7 @@ use race2love_core::{
     config::{Config, config_path},
     devices::MockDevice,
     runtime::RaceRuntime,
-    telemetry::DemoSource,
+    telemetry::{DemoSource, TelemetrySource},
 };
 use race2love_lovense::LovenseService;
 use tracing_subscriber::EnvFilter;
@@ -16,16 +16,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::new(
-                "race2love=info,race2love_core=info,race2love_gui=info,race2love_lovense=info",
+                "race2love=info,race2love_core=info,race2love_gui=info,race2love_lovense=info,race2love_lmu=info",
             )
         }))
         .try_init()
         .map_err(|error| -> Box<dyn Error> { error })?;
     let mut headless_seconds = None;
+    let mut use_lmu = false;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
-            "--demo" => {}
+            "--demo" => use_lmu = false,
+            "--lmu" => use_lmu = true,
             "--demo-seconds" => {
                 let seconds: u64 = arguments
                     .next()
@@ -38,12 +40,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Race2Love\n\nUsage: race2love [--demo] [--demo-seconds SECONDS]\n\nWithout arguments, launch the native Demo window.\n--demo-seconds runs the same pipeline without a display.\nRACE2LOVE_CONFIG overrides the TOML settings path.\nRUST_LOG controls tracing output."
+                    "Race2Love\n\nUsage: race2love [--demo | --lmu] [--demo-seconds SECONDS]\n\nWithout arguments, launch the native Demo window.\n--lmu selects native Windows LMU shared memory.\n--demo-seconds runs Demo with mock output without a display.\nRACE2LOVE_CONFIG overrides the TOML settings path.\nRUST_LOG controls tracing output."
                 );
                 return Ok(());
             }
             _ => return Err(format!("Unknown argument: {argument}; use --help").into()),
         }
+    }
+    if use_lmu && headless_seconds.is_some() {
+        return Err("--demo-seconds only supports Demo; omit --lmu".into());
     }
     let (path, config, message) = match config_path() {
         Ok(path) => match Config::load(&path) {
@@ -67,13 +72,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         let _entered = executor.enter();
         LovenseService::spawn()
     };
+    let source: Box<dyn TelemetrySource> = if use_lmu {
+        race2love_lmu::native_source()
+    } else {
+        Box::new(DemoSource::default())
+    };
     let runtime = {
         let _entered = executor.enter();
-        RaceRuntime::spawn(
-            Box::new(DemoSource::default()),
-            device.clone(),
-            config.clone(),
-        )?
+        RaceRuntime::spawn(source, device.clone(), config.clone())?
     };
     let result: Result<(), String> = if let Some(seconds) = headless_seconds {
         executor.block_on(async {
