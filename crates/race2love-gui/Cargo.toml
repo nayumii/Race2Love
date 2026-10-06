@@ -1,0 +1,18 @@
+[package]
+name = "race2love-gui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Native egui interface for Race2Love"
+
+[dependencies]
+eframe.workspace = true
+race2love-core.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,49 @@
+[workspace]
+members = ["crates/race2love-core", "crates/race2love-gui"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+publish = false
+
+[workspace.dependencies]
+race2love-core = { path = "crates/race2love-core" }
+race2love-gui = { path = "crates/race2love-gui" }
+# 0.34 supports Rust 1.92; 0.36 requires 1.95. Glow avoids the larger wgpu stack.
+eframe = { version = "0.34.3", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+toml = "1.1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[package]
+name = "race2love"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Native racing telemetry to configurable haptic feedback"
+
+[features]
+default = ["gui"]
+gui = ["dep:race2love-gui"]
+
+[dependencies]
+race2love-core.workspace = true
+race2love-gui = { workspace = true, optional = true }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+
+[lints]
+workspace = true

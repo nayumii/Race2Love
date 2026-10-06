@@ -1,0 +1,18 @@
+[package]
+name = "race2love-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Simulator-independent telemetry, effects, mixer, and runtime"
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
+

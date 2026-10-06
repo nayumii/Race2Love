@@ -1,0 +1,35 @@
+version = 1
+
+[lovense]
+host = "127.0.0.1"
+# port = 20010 # Example only: use the port/protocol reported by your Remote.
+automatic_reconnect = true
+request_timeout_ms = 1000
+
+[effects.engine]
+enabled = true
+start_ratio = 0.2
+end_ratio = 1.0
+min_intensity = 0.05
+max_intensity = 0.65
+curve = "linear" # linear, exponential, logarithmic
+
+[effects.gear_shift]
+enabled = true
+intensity = 0.9
+attack_ms = 10
+hold_ms = 70
+release_ms = 60
+
+[output]
+global_intensity = 0.5
+max_intensity = 0.75
+telemetry_hz = 60
+effects_hz = 60
+update_hz = 25
+telemetry_timeout_ms = 250
+
+[ui]
+start_minimized = false
+show_debug = false
+refresh_hz = 30
