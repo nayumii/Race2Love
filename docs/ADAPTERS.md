@@ -1,48 +1,26 @@
 # Adapter implementation plan
 
-This document describes future work, not capabilities already implemented.
+The Lovense backend is implemented. The remaining simulator sections describe
+future work.
 
 ## Phase 2: Lovense local backend
 
-Add `race2love-lovense` depending on core, serde, reqwest, Tokio and tracing.
-Confirm the current reqwest release/features first; use an HTTP client with a
-short timeout, bounded response body, no uncontrolled redirects, and explicit
-connection state. Do not add a cloud discovery dependency.
+`race2love-lovense` implements local `/command` `GetToys` and targeted `Function`
+requests using reqwest 0.13.5, typed serde responses, and a bounded Tokio worker.
+It accepts documented string-encoded toy maps and object maps, and numeric/string
+status fields. Unknown capabilities remain unknown; reported unsupported vibration
+is unavailable. No toy is selected automatically or persisted across launches.
 
-Start from the official [Standard API / Game Mode documentation](https://developer.lovense.com/docs/standard-solutions/standard-api)
-and [local Game Mode demo](https://developer.lovense.com/standard-api-demo-game-mode).
-The direct local `/command` endpoint supports `GetToys` and `Function` commands.
-Remote variants can differ in HTTP/HTTPS port and response types; use the address
-reported by the user's Remote. The host and optional port are already persisted.
-Add a protocol setting during this phase once behavior is verified.
+Fake Remote acceptance tests cover protocol headers/bodies, malformed responses,
+HTTP errors, response limits, timeouts, lease expiry/renewal, duplicate suppression,
+selection/disconnect, manual tests, in-flight cancellation, reconnect, toy loss,
+Stop failure bounds, and normal shutdown. GUI tests exercise connection controls
+and error reporting. Physical localhost/LAN Remote and toy verification remain
+outstanding; there was no hardware available in the development environment.
 
-Implementation order:
-
-1. Typed `GetToys` request/response parser, tested with a fake HTTP server for
-   disconnected toys, malformed bodies, unexpected status/types and timeouts.
-   Some responses encode the `toys` object as a JSON string; verify and support
-   actual documented/observed response shapes without permissive guessing.
-2. UI Connect/Disconnect and selected-toy discovery. Do not command every toy
-   implicitly when a toy identifier is omitted. Separate endpoint discovery from
-   discovery of toys connected to a known endpoint.
-3. Normalized vibration conversion and idempotent Stop for the selected toy.
-   Verify vibration step range and finite `timeSec` rules with current docs and
-   test responses. Never use indefinite commands as the default.
-4. Short leases plus renewal for unchanged output. Extend the output gate with a
-   backend renewal deadline, bounded by its normal rate limit. Avoid stale cached
-   positive output when a new device connects. Test command expiry separately
-   from normal-exit Stop.
-5. A short manual test pulse that respects global/maximum intensity, emergency
-   stop, connection state, and lease expiry. It must have a deliberate route that
-   does not depend on the presence of racing telemetry.
-6. Bounded reconnect backoff, toy status updates and fresh-session Stop. Display
-   concise errors and retain protocol/transport details in tracing logs.
-
-Acceptance: a fake Remote proves request bodies, response handling, finite lease
-renewal, deduplication, timeout/fault behavior, emergency stop during a request,
-disconnect/reconnect, test expiry and shutdown Stop. Then verify an explicitly
-selected real toy on localhost and LAN. A LAN outage must expire vibration even
-when a stop request cannot arrive.
+See [LOVENSE.md](LOVENSE.md) for setup, official sources, dependency rationale,
+finite command timing, retry limits, and hardware verification steps. Discovery is
+through a configured endpoint; automatic LAN scanning is not implemented.
 
 ## Phase 3: Windows LMU
 

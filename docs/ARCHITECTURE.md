@@ -2,6 +2,7 @@
 
 `race2love-core` owns normalized telemetry, preferences, independent generators,
 mixing, output safety, and worker orchestration. `race2love-gui` owns native views.
+`race2love-lovense` owns local HTTP protocol, discovery, selection, and reconnect.
 `src/main.rs` owns logging, config loading, the two-thread Tokio executor, and the
 awaited shutdown after the desktop event loop returns.
 
@@ -19,7 +20,7 @@ never an input to a generator or a device backend.
 `HapticDevice` is an object-safe `Send + Sync` interface with boxed futures for
 `set_vibration` and `stop`. This uses the standard library without async-trait.
 Intensity is `0..=1`; conversion to device integer steps belongs in each backend.
-Phase 1's mock stores only an atomic current intensity, connection bit, and two
+The mock stores only an atomic current intensity, connection bit, and two
 counters. It never accumulates command history.
 
 ## Tasks and channels
@@ -62,8 +63,9 @@ For each active effect, weight is
 The mixer computes `1 - product(1 - intensity * weight)`. Effects at the highest
 priority retain full strength; others are attenuated. The result is clamped,
 multiplied by global intensity, then capped by maximum intensity. Non-finite
-values fail closed to zero. The current output gate rounds downward to 1% steps
-to avoid rounding above an arbitrary safety ceiling.
+values fail closed to zero. Each backend supplies downward quantization: 1% for the mock and 5% for Lovense.
+The gate compares the quantized result. Backends can request a refresh interval;
+Lovense renews unchanged positive output at 500 ms within the output rate cap.
 
 ## Stop and fault handling
 
@@ -76,8 +78,8 @@ The device worker checks controls, current telemetry age, effects heartbeat,
 connection state, and output ceiling independently. Emergency/source control
 changes can cancel an in-flight positive request; a stop follows cancellation.
 Stops bypass positive-output throttling. Cancellation of an HTTP future does not
-prove that Remote did not already receive its command; the Phase 2 lease/Stop
-protocol must cover that case.
+prove that Remote did not already receive its command; the Lovense worker follows
+canceled positive requests with Stop and uses two-second finite command leases.
 
 Before initial output, on connection transitions, and on shutdown, the worker
 attempts a timeout-bounded stop. A communication failure latches output off,
@@ -85,15 +87,29 @@ attempts one best-effort stop, and suppresses automatic output retries until
 explicit Stop/Resume. It records a human-readable error and logs the failure.
 Shutdown signals all workers, disconnects the source, and awaits the final stop.
 
-Hardware backends must add finite command leases and periodic renewal for
-unchanged positive intensities. Lease renewals are necessary commands and must
-bypass duplicate suppression while retaining the request rate cap. Backend toy
-status polling/reconnect belongs outside the GUI and must use bounded retries.
+Runtime device selection is a watch channel. Selection latches emergency stop,
+and the output worker stops the previous backend before accepting the replacement.
+A backend connection epoch detects reconnect/selection transitions even if they
+complete between output samples. Physical backend transitions latch emergency
+stop and require explicit Resume. Failed Stops do not repeatedly change epochs.
+
+Manual Test is a bounded one-second control deadline, independent of telemetry.
+It pauses Demo and passes through global scaling and the ceiling. Emergency stop,
+backend changes, timeout, and shutdown cancel it. It cannot clear emergency stop.
+
+The Lovense worker serializes positive commands and selection/Stop operations via
+an eight-entry request channel, with oneshot acknowledgements. Configuration and
+selection use a watch channel. A canceled acknowledgement cancels the HTTP future
+and sends Stop. Status discovery can remain pending while commands/Stop are
+handled, avoiding both head-of-line blocking and discovery starvation. HTTP bodies
+are capped at 64 KiB; all requests have timeouts. No background requests occur
+until explicit Connect. Healthy discovery polls every two seconds; connection
+failure uses at most five retries at 1/2/4/8/16 seconds. Toy selection is transient.
 
 ## Future modules
 
-Phase 2 adds `race2love-lovense`, implementing `HapticDevice` and connection/toy
-discovery. Phase 3 adds `race2love-lmu`, implementing `TelemetrySource`. Its parser
+Phase 2 implements `race2love-lovense`; see [protocol and safety details](LOVENSE.md).
+Phase 3 adds `race2love-lmu`, implementing `TelemetrySource`. Its parser
 is shared between Windows and Linux; only acquiring/reading shared memory differs
 by platform. Unsafe code, if needed for mappings, belongs in a narrow documented
 adapter, with crate-specific lint policy. Core/GUI currently forbid unsafe code.

@@ -1,0 +1,36 @@
+name: Rust checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+      RACE2LOVE_CONFIG: ${{ runner.temp }}/race2love-ci.toml
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+      - name: Rust stable
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - run: cargo +stable fmt --all --check
+      - run: cargo +stable check --workspace --all-targets --locked
+      - run: cargo +stable clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo +stable test --workspace --locked
+      - run: cargo +stable run --locked -- --demo-seconds 5

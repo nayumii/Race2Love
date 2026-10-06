@@ -6,10 +6,10 @@ Ultimate → Lovense Remote/Game Mode**, on Linux with Steam/Proton and Windows
 10/11. The design uses no SimHub, Electron, browser frontend, or mandatory cloud
 service.
 
-**Phase 1 implementation:** the application starts in **Demo** mode and sends
-output to an **in-memory mock device**. Real LMU and Lovense connections are not
-implemented yet. See [validation status](docs/VALIDATION.md) for the build checks
-and Linux Demo checks completed, plus the remaining platform limitations.
+**Phase 2 implementation:** the application starts with **Demo telemetry** and an
+**in-memory mock device**. The local Lovense backend is available through an
+explicit Connect and toy selection. Real LMU telemetry is planned for Phases 3
+and 4. See [validation status](docs/VALIDATION.md) for checks and platform limits.
 
 ## Try Demo
 
@@ -32,9 +32,10 @@ The native window has three views:
   range, linear/exponential/logarithmic curves, and shift pulse envelopes.
 - **Devices / Settings:** saved Lovense host/port preferences, update rates,
   telemetry timeout, start-minimized, debug values, and configuration location.
-  Physical-device controls are marked as coming in Phase 2.
+  Connect/discover, explicit toy selection, timed test vibration, and disconnect.
 
-Changes apply immediately when valid. **Emergency Stop** (also **Esc**) latches
+Effect changes apply immediately when valid. Remote address/policy changes latch
+output off and apply when you click Connect. **Emergency Stop** (also **Esc**) latches
 output off until **Resume output** is clicked. Pausing Demo also stops output.
 Changed settings save on normal exit; **Save settings** saves explicitly.
 
@@ -49,7 +50,8 @@ For a build that skips compiling native display dependencies, use
 metadata for workspace dependencies on its first resolution.
 
 The command prints a telemetry/output summary, then awaits the workers' shutdown
-and final device stop. Neither Demo command accesses physical hardware.
+and final device stop. The display-free Demo never accesses hardware. The GUI also starts with mock
+output; physical output requires Connect, toy selection, and explicit Resume.
 
 ## Linux setup
 
@@ -85,8 +87,10 @@ cargo build --locked --release
 
 The release executable uses the Windows GUI subsystem. No administrator access
 is needed to run the application. Debug builds retain the console for logging.
-The complete workspace passes a Windows GNU target compile check from Linux.
-A native Windows MSVC build and runtime check remain to be performed.
+The TLS crypto provider needs the C/C++ compiler supplied by those Build Tools.
+The complete workspace also passes a Windows GNU target check from Linux using
+Clang with the validation-only flags recorded in [VALIDATION.md](docs/VALIDATION.md).
+Normal Windows GNU builds use MinGW. Native MSVC build/runtime validation remains.
 
 ## Architecture
 
@@ -99,10 +103,10 @@ EffectMixer (bounded, priority-aware)
     ↓ normalized mixed intensity
 global intensity multiplier + absolute maximum
     ↓ watch channel + rate/duplicate gate + watchdog
-HapticDevice (MockDevice now; Lovense adapter later)
+HapticDevice (MockDevice or local Lovense Remote)
 ```
 
-The workspace has an executable plus two library crates:
+The workspace has an executable plus three library crates:
 
 ```text
 Cargo.toml
@@ -114,15 +118,17 @@ crates/race2love-core/src/
   mixer.rs                        # transient envelopes and priority mixing
   devices.rs                      # device trait and bounded in-memory mock
   runtime.rs                      # telemetry/effects/output tasks and controls
+crates/race2love-lovense/src/       # typed protocol and local connection worker
 crates/race2love-gui/src/lib.rs     # native eframe/egui views
 docs/                             # adapter plans and validation record
 ```
 
-Separate adapter crates will be added when their implementations exist. The
+The LMU adapter crate will be added with its implementation. The
 core contains no LMU memory layouts or Lovense protocol fields. Telemetry reads,
 effects, and output each have their own Tokio task on a two-worker runtime. The
 GUI reads snapshots and sends settings/controls through latest-value `watch`
-channels; it makes no network requests. See [architecture details](docs/ARCHITECTURE.md).
+channels; it makes no network requests. Lovense discovery and commands run in
+a separate connection worker. See [architecture details](docs/ARCHITECTURE.md).
 
 ## Effects and timing
 
@@ -140,11 +146,12 @@ are retained. The global multiplier applies **after mixing**, followed by an
 independent absolute intensity ceiling. All output is normalized to `0..=1`.
 
 Defaults are **60 Hz telemetry**, **60 Hz effects**, **25 Hz device output**, and
-**30 Hz GUI refresh**. Device updates are quantized downward to 1% steps and
-duplicates are suppressed. Stops bypass the positive-output rate limit. Paused
+**30 Hz GUI refresh**. Device updates round downward to 1% steps for mock output
+and 5% steps for Lovense. Duplicates are suppressed, except for required Lovense
+lease renewal every 500 ms. Stops bypass the positive-output rate limit. Paused
 telemetry polls at 1 Hz and inactive effect/UI timers use 2 Hz. These are starting
-choices, not measured latency/CPU guarantees. Physical-backend command resolution
-and finite-lease refresh must be verified in Phase 2.
+choices, not measured latency/CPU guarantees. Lovense commands expire after two seconds without renewal. Hardware timing
+and CPU/latency still require measurement.
 
 Demo simulates a 24-second driving cycle with RPM ramps, up/downshifts, braking,
 slip, kerbs, and occasional explicit impacts. Slip, suspension velocity, vertical
@@ -164,7 +171,8 @@ invalid files are reported and preserved until an explicit save or a changed
 settings save on exit. Writes stage a temporary file in the same directory before
 replacement. TOML stores preferences, never active sessions, telemetry frames,
 emergency-stop state, or detected devices. [Example config](config.example.toml)
-shows all Phase 1 fields.
+shows all current fields. Lovense protocol is `http` or `https`; HTTPS verifies
+certificates. Toy selection and connection state are not persisted.
 
 `RUST_LOG` controls tracing. The default logs connections, configuration activity,
 and failures rather than every frame:
@@ -182,11 +190,19 @@ resumes. Commands and stops have bounded timeouts. Communication failures latch
 output off; only an explicit Stop/Resume permits another attempt. A best-effort
 stop is attempted once after an output failure, with no endless retry loop.
 
-Phase 1 uses a mock device and cannot leave a real toy running. Phase 2 must use
-finite-duration commands, refresh their lease even when intensity is unchanged,
-and verify actual Remote behavior. A crash, power loss, or unreachable Remote
-cannot be handled by sending a final network stop; command expiry must provide
-that protection. No physical-device crash protection is claimed yet.
+Lovense output always targets one explicitly selected toy. Positive commands use
+`timeSec = 2`, `stopPrevious = 1`, and a 500 ms renewal interval. Zero intensity
+sends Stop. Source/device switches stop previous output. Reconnected devices stay
+stopped until Resume; automatic connection retries stop after five attempts.
+
+The one-second manual Test intentionally works without game telemetry, pauses
+Demo, and respects emergency stop and both intensity limits. It leaves Demo
+paused when it ends. Enable Demo again to use racing effects.
+
+A crash, power loss, or unreachable Remote can prevent a final network Stop.
+Finite command expiry bounds remaining output under the documented Remote API.
+This behavior is verified against a fake Remote; actual toy/Remote versions have
+not been tested in this environment. See [Lovense details](docs/LOVENSE.md).
 
 ## LMU telemetry (planned, Phases 3 and 4)
 
@@ -216,23 +232,33 @@ Wheel slip, kerb, and collision effects will stay optional until their LMU value
 units, availability, and false-positive behavior are verified. Details are in
 [adapter plans](docs/ADAPTERS.md).
 
-## Lovense setup (for Phase 2)
-
-Race2Love currently saves connection preferences but does **not** connect to
-Lovense Remote. To prepare a mobile Remote for its future local backend:
+## Lovense setup
 
 1. Pair your toy in Lovense Remote.
-2. Open **Discover → Game Mode** and enable **Enable LAN**.
-3. Use the IP/port shown by Remote; keep the computer and Remote on the same LAN.
-4. Enter that host/port under Devices / Settings. Port `0` means unset in Phase 1.
+2. On mobile, open **Discover → Game Mode → Enable LAN**. On PC, enable
+   **Allow Control**.
+3. In Devices / Settings, enter Remote's host/IP, port, and HTTP/HTTPS protocol.
+   The **Local HTTP preset** fills `127.0.0.1:20010`; confirm your Remote's port.
+   The documented PC HTTPS endpoint is `127-0-0-1.lovense.club:30010`.
+4. Click **Connect / Discover toys**, then select one connected toy. These actions
+   latch emergency stop and send Stop before enabling the backend.
+5. Pause Demo on Dashboard, click **Resume output**, then use **Test vibration**.
+   The test lasts one second at 40% × global intensity, capped by maximum intensity.
+6. Enable Demo to run the RPM/shift pipeline with synthetic telemetry. Use
+   **Emergency Stop** at any time. **Disconnect / Use Demo output** stops the toy
+   and returns to mock output with emergency stop latched.
 
-These steps follow [Lovense's official Game Mode demo](https://developer.lovense.com/standard-api-demo-game-mode).
-For PC Remote, the official integration documentation calls the setting
-**Allow Control**: [Remote integration guide](https://developer.lovense.com/docs/game-engine-plugins/ue-plugin-remote).
-Endpoint/protocol differences must be tested before enabling real output.
-The manual LAN path avoids mandatory developer registration, QR/cloud discovery,
-and external service calls. Automatically finding Remote on a LAN is a separate
-problem from asking a known Remote endpoint for its connected toys.
+Mobile setup and the HTTP preset follow the [official Game Mode demo](https://developer.lovense.com/standard-api-demo-game-mode).
+PC setup is described in the [Remote integration guide](https://developer.lovense.com/docs/game-engine-plugins/ue-plugin-remote)
+and [Standard API](https://developer.lovense.com/docs/standard-solutions/standard-api).
+For LAN operation, keep Race2Love and Remote on the same network. Linux can use
+mobile Remote over LAN. HTTPS requires the certificate's valid hostname; raw IP
+addresses may fail verification. Certificate verification is never disabled.
+
+Discovery asks the configured Remote for its toys. There is no automatic LAN
+scan, QR/cloud discovery, developer token, or auto-connect on launch. Reconnects
+use bounded backoff; Resume is always required before output returns. Endpoint
+errors appear in the GUI and technical details are logged.
 
 ## Development checks and next phase
 
@@ -243,28 +269,26 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-All **25 tests** pass: 24 core tests and one GUI interaction test. Core and pipeline
-tests use Demo, a controllable mock telemetry source, and mock, failing, and slow
-devices. They cover curves, clamps, shifts, envelopes, mixer priorities/bounds,
-scaling, timeout handling, configuration, live settings, stop/resume, connection
-changes, output deduplication, slow requests, faults, and shutdown. The GUI test
-drives actual egui input to check controls, effect edits, saved/reloaded TOML,
-pause, Escape, and exit. Tests require no desktop display, LMU, or hardware.
+All **40 tests** pass: 25 core tests, two GUI interaction tests, one reconnect
+backoff test, and 12 fake Remote integration tests. They cover effect logic,
+configuration, pipeline safety, GUI controls, typed discovery, targeted request
+bodies, bounded responses/timeouts, finite expiry, renewal/deduplication,
+selection changes, manual-test limits, cancellation, reconnect, toy loss,
+persistent Stop failures, and shutdown. No real LMU or toy is required.
 
-The native Demo window was also verified on Linux/X11, including live telemetry,
-Escape emergency stop, and normal shutdown with zero output. `Cargo.lock` is
-included for reproducible dependency resolution.
+`Cargo.lock` is included. See [validation results](docs/VALIDATION.md) for native
+Linux and platform compile checks. GitHub CI checks Linux and native Windows/MSVC
+on push and pull requests; the new workflow has not run in this local session.
 
-**Exact Phase 2 next step:** add `race2love-lovense` with a timeout-bounded reqwest
-client, first implement local `/command` `GetToys` discovery and typed response
-validation against a fake HTTP server, then add selected-toy finite-duration
-vibration/Stop commands and lease renewal. Replace the mock backend only after
-the connection/test/stop flow is verified. See [Phase 2 acceptance checks](docs/ADAPTERS.md#phase-2-lovense-local-backend).
+**Exact Phase 3 next step:** verify LMU's current shipped SDK header and mapping
+contract, then add `race2love-lmu` with a layout-checked parser and native Windows
+read-only mapping access. Initially normalize speed, RPM/max RPM, gear, throttle,
+and brake. Keep the parser shared for the subsequent Linux/Proton adapter.
 
-Known Phase 1 limits: native Windows/MSVC and native Wayland runtime checks remain;
-no real LMU or Lovense adapter; no slip, kerb, collision effects, graphs, tray,
-autostart, or named profiles. CPU usage and end-to-end latency have not been
-benchmarked.
+Known limits: real LMU telemetry and physical Lovense/Remote behavior remain
+untested; native Windows/MSVC and native Wayland runtime checks remain; no slip,
+kerb, collision effects, graphs, tray, autostart, or named profiles. CPU usage and
+end-to-end latency have not been benchmarked.
 
 ## License
 
