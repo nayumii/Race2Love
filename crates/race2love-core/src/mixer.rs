@@ -96,6 +96,22 @@ impl EffectMixer {
     pub fn clear(&mut self) {
         self.active.clear();
     }
+    /// Effect kinds own distinct priorities; disabling one must preserve others.
+    pub fn clear_priority(&mut self, priority: u8) {
+        self.active
+            .retain(|active| active.effect.priority != priority);
+    }
+    pub fn level_at_priority(&self, priority: u8, now: Instant) -> f32 {
+        self.active
+            .iter()
+            .filter(|active| active.effect.priority == priority)
+            .fold(0.0, |mixed, active| {
+                let level = active
+                    .effect
+                    .sample(now.saturating_duration_since(active.started));
+                mixed + (1.0 - mixed) * level
+            })
+    }
     pub fn active_count(&self) -> usize {
         self.active.len()
     }

@@ -23,6 +23,26 @@ attack_ms = 10
 hold_ms = 70
 release_ms = 60
 
+[effects.wheel_slip]
+enabled = false
+threshold = 0.12 # Sliding contact fraction, not longitudinal slip ratio.
+gain = 1.5
+max_intensity = 0.6
+
+[effects.road]
+enabled = false
+threshold_mps = 0.25 # Absolute suspension travel speed, m/s.
+gain = 1.0
+acceleration_threshold_mps2 = 1.0 # High-pass vertical acceleration, m/s².
+acceleration_gain = 0.12
+kerb_intensity = 0.5 # Verified loaded-tyre rumble-strip contact; capped by max_intensity.
+max_intensity = 0.5
+
+[effects.impact]
+enabled = false
+threshold = 0.15 # LMU: explicit new impact and acceleration / 100 m/s².
+intensity = 0.8
+
 [output]
 global_intensity = 0.5
 max_intensity = 0.75
@@ -35,3 +55,4 @@ telemetry_timeout_ms = 250
 start_minimized = false
 show_debug = false
 refresh_hz = 30
+show_graphs = false

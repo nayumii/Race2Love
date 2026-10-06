@@ -659,8 +659,21 @@ async fn rpm_shift_pipeline_applies_live_settings_and_clears_pulses_on_timeout()
             .is_none_or(|step| (4..=9).contains(&step.parse::<u8>().unwrap()))
     }));
 
+    // Real gearbox telemetry may briefly publish neutral between forward gears.
+    frames.send_replace(Some((5_000.0, 0)));
+    wait_for(|| {
+        runtime
+            .control
+            .snapshot()
+            .telemetry
+            .frame
+            .as_ref()
+            .is_some_and(|f| f.gear == 0)
+    })
+    .await;
     frames.send_replace(Some((5_000.0, 4)));
     wait_for(|| remote.active("b") == 9).await;
+    assert!(runtime.control.snapshot().effects.levels.shift_count > 0);
     config.effects.gear_shift.enabled = false;
     runtime.control.update_config(config.clone()).unwrap();
     wait_for(|| remote.active("b") == 4).await;

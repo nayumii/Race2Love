@@ -70,8 +70,10 @@ The decoder validates payload length, game-marker family 1.2–1.4
 numbers. It selects the explicit player slot. Unknown game families and malformed
 snapshots fail closed. `gameVersion` is not an ABI version: these checks cannot
 prove a patch preserved every offset. Compare the shipped SDK after game updates.
-Optional slip, suspension, vertical acceleration and impact values remain `None`
-for LMU until separately verified in Phase 6.
+Phase 6 decodes optional wheel and impact fields from the installed SDK layout;
+malformed optional fields become unavailable without discarding basic RPM/gear.
+See [exact fields, units and caveats](EFFECTS.md). The C++ compatibility checker
+includes their offsets; re-run it against the shipped SDK after game updates.
 
 ## Access and safety
 
@@ -171,7 +173,7 @@ immediate Resume. Manual Test remains an explicit one-second telemetry exception
 
 One 324820-byte owned snapshot buffer is retained without a frame queue. Windows
 copies that buffer under the SDK lock (about 19.5 MB/s at 60 Hz). Linux reads only
-used prefixes twice, at most 1326 bytes per tick (about 80 KB/s at 60 Hz), and
+used scoring/header fields and the full player record twice, at most 4022 bytes per tick (about 241 KB/s at 60 Hz), and
 writes them into the shared-layout buffer. Adding decoded fields requires extending
 those prefixes/consistency checks. CPU and end-to-end latency need live measurement.
 

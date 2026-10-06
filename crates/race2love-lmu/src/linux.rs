@@ -24,7 +24,9 @@ use proc::Identity;
 // Wine rounds anonymous sections to 4 KiB; no arbitrary large-file scanning.
 const MAX_BACKING_SIZE: u64 = ALLOCATION_SIZE.div_ceil(4096) as u64 * 4096;
 const SCORING_PREFIX: usize = 116;
-const VEHICLE_PREFIX: usize = MAX_RPM + 8;
+// Phase 6 consumes wheel records at the end of the player record. Compare both
+// complete reads so new optional data has the same consistency protection.
+const VEHICLE_PREFIX: usize = VEHICLE_SIZE;
 const MAX_CANDIDATES: usize = 16;
 
 pub(crate) struct LinuxReader {

@@ -21,5 +21,16 @@ pub const RPM: usize = 356;
 pub const THROTTLE: usize = 388;
 pub const BRAKE: usize = 396;
 pub const MAX_RPM: usize = 532;
+pub const ACCELERATION: usize = 208;
+pub const LAST_IMPACT_TIME: usize = 552;
+pub const WHEELS: usize = 848;
+pub const WHEEL_SIZE: usize = 260;
+pub const SUSPENSION_DEFLECTION: usize = 0;
+pub const TIRE_LOAD: usize = 104;
+pub const SLIDING_FRACTION: usize = 112;
+pub const TERRAIN_NAME: usize = 160;
+pub const SURFACE_TYPE: usize = 176;
+
+const _: () = assert!(WHEELS + 4 * WHEEL_SIZE == VEHICLE_SIZE);
 
 const _: () = assert!(VEHICLES + MAX_VEHICLES * VEHICLE_SIZE == PAYLOAD_SIZE);

@@ -25,6 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut last_error = None;
     let mut latest = None;
     let mut frames = 0;
+    let mut last_gear = None;
     while Instant::now() < deadline {
         let now = Instant::now();
         if !source.is_connected() && now >= next_connect {
@@ -37,6 +38,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         if source.is_connected() {
             match source.read_frame() {
                 Ok(Some(frame)) => {
+                    if last_gear != Some(frame.gear) {
+                        println!("Gear transition: {:?} -> {}", last_gear, frame.gear);
+                        last_gear = Some(frame.gear);
+                    }
                     frames += 1;
                     latest = Some(frame);
                     last_error = None;
@@ -63,6 +68,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                     frame.brake * 100.0,
                     frame.session.as_deref().unwrap_or("unknown session"),
                     frame.car.as_deref().unwrap_or("unknown car")
+                );
+                println!(
+                    "  sliding={:?} suspension_mps={:?} vertical_mps2={:?} kerb={:?} terrain={:?} impact={:?}",
+                    frame.wheel_slip,
+                    frame.suspension_velocity,
+                    frame.vertical_acceleration,
+                    frame.kerb_contact,
+                    frame.wheel_terrain,
+                    frame.impact
                 );
             } else {
                 println!("Waiting for advancing player telemetry ({frames} fresh frames/s)");

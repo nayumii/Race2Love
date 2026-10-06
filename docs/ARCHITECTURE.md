@@ -168,3 +168,13 @@ Phase 6 adds generators for verified slip/road/impact signals and bounded rollin
 graphs. It does not introduce those algorithms into the telemetry adapter or
 Lovense backend. LMU is selectable on Windows and Linux; other platforms retain
 Demo and report native acquisition as unavailable.
+
+Gear detection retains the previous forward gear across neutral for at most
+250 ms; long neutral, reverse, skipped gears and stale sample gaps do not create
+normal shift pulses. Engine, slip and road share priority 20 so added road cues
+are not masked by a stronger engine signal. Shift (160) and impact (220) envelopes
+remain independent. Road vertical filtering advances only on fresh telemetry,
+with a 200 ms baseline filter and a 10 ms attack / 80 ms release output follower.
+Filters and event identities reset with the existing safety resets. GUI snapshots
+include independent effect levels and a shift counter; no extra shared mutexes
+or tasks are needed. See [EFFECTS.md](EFFECTS.md).

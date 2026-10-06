@@ -15,7 +15,7 @@ use tokio::{
 use crate::{
     config::{Config, ConfigError},
     devices::{DeviceError, HapticDevice},
-    effects::EffectEngine,
+    effects::{EffectEngine, EffectLevels},
     scale_output,
     telemetry::{TelemetryError, TelemetryFrame, TelemetrySource},
     unit,
@@ -83,6 +83,7 @@ impl StopReason {
 
 #[derive(Clone, Copy, Debug)]
 pub struct EffectSnapshot {
+    pub levels: EffectLevels,
     pub source_generation: u64,
     pub mixed: f32,
     pub intensity: f32,
@@ -232,6 +233,7 @@ impl RaceRuntime {
             error: None,
         });
         let (effects_tx, effects_rx) = watch::channel(EffectSnapshot {
+            levels: EffectLevels::default(),
             source_generation: 0,
             mixed: 0.0,
             intensity: 0.0,
@@ -519,6 +521,7 @@ async fn effects_task(
             clock_hz = desired_hz;
         }
         state.send_replace(EffectSnapshot {
+            levels: engine.levels(),
             source_generation: telemetry.source_generation,
             mixed,
             intensity,
@@ -527,6 +530,7 @@ async fn effects_task(
         });
     }
     state.send_replace(EffectSnapshot {
+        levels: EffectLevels::default(),
         source_generation: controls.borrow().source_generation,
         mixed: 0.0,
         intensity: 0.0,
@@ -1133,6 +1137,7 @@ mod tests {
         });
         // Keep this sender alive but deliberately do not refresh its heartbeat.
         let (effects_tx, effects_rx) = watch::channel(EffectSnapshot {
+            levels: EffectLevels::default(),
             mixed: 0.5,
             source_generation: 0,
             intensity: 0.25,

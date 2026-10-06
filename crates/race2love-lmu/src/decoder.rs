@@ -24,6 +24,8 @@ pub struct DecodedFrame {
     pub elapsed_seconds: f64,
     pub vehicle_id: i32,
     pub game_version: i32,
+    /// Adapter-private travel samples for a game-clock derivative in LmuSource.
+    pub suspension_deflection: Option<[f32; 4]>,
 }
 
 /// `None` means no live player car (menus, non-realtime, loading or vehicle exit).
@@ -65,6 +67,51 @@ pub fn decode(bytes: &[u8], observed: Instant) -> Result<Option<DecodedFrame>, D
         number(car, VELOCITY + 16, "mLocalVel.z", -2_000.0, 2_000.0)?,
     ];
     let track = text(&bytes[SCORING..SCORING + 64]);
+    let wheels: [&[u8]; 4] =
+        std::array::from_fn(|index| &car[WHEELS + index * WHEEL_SIZE..][..WHEEL_SIZE]);
+    let suspension_deflection =
+        optional_four(|index| optional_number(wheels[index], SUSPENSION_DEFLECTION, -2.0, 2.0));
+    let wheel_slip = optional_four(|index| {
+        let wheel = wheels[index];
+        let load = optional_number(wheel, TIRE_LOAD, 0.0, 1e7)?;
+        let sliding = optional_number(wheel, SLIDING_FRACTION, 0.0, 1.0)?;
+        Some(if load >= 50.0 { sliding } else { 0.0 })
+    });
+    let kerb_contact = wheels
+        .iter()
+        .all(|wheel| wheel[SURFACE_TYPE] <= 6)
+        .then(|| {
+            std::array::from_fn(|index| {
+                wheels[index][SURFACE_TYPE] == 5
+                    && optional_number(wheels[index], TIRE_LOAD, 0.0, 1e7)
+                        .is_some_and(|load| load >= 50.0)
+            })
+        });
+    let terrain: [String; 4] = std::array::from_fn(|index| {
+        text(&wheels[index][TERRAIN_NAME..TERRAIN_NAME + 16]).unwrap_or_default()
+    });
+    let wheel_terrain = terrain
+        .iter()
+        .any(|name| !name.is_empty())
+        .then_some(terrain);
+    let acceleration: Option<[f32; 3]> = (|| {
+        Some([
+            optional_number(car, ACCELERATION, -5_000.0, 5_000.0)?,
+            optional_number(car, ACCELERATION + 8, -5_000.0, 5_000.0)?,
+            optional_number(car, ACCELERATION + 16, -5_000.0, 5_000.0)?,
+        ])
+    })();
+    let impact_time = number(car, LAST_IMPACT_TIME, "mLastImpactET", 0.0, elapsed).ok();
+    // SDK impact magnitude has no documented SI units. Severity is instead a
+    // documented acceleration proxy (100 m/s² = full scale), gated by the game's
+    // explicit recent impact timestamp. Normal braking/kerbs alone cannot fire it.
+    let impact = impact_time.zip(acceleration).map(|(time, accel)| {
+        if time > 0.0 && elapsed - time <= 0.25 {
+            (accel.iter().map(|a| a * a).sum::<f32>().sqrt() / 100.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    });
     let session = match i32_at(bytes, SCORING + 64) {
         0 => "Test day",
         1..=4 => "Practice",
@@ -86,13 +133,29 @@ pub fn decode(bytes: &[u8], observed: Instant) -> Result<Option<DecodedFrame>, D
             session: Some(
                 track.map_or_else(|| session.into(), |track| format!("{session} · {track}")),
             ),
-            // Optional signals require separate verification in Phase 6.
+            wheel_slip,
+            vertical_acceleration: optional_number(car, ACCELERATION + 8, -5_000.0, 5_000.0),
+            impact,
+            impact_id: impact_time.filter(|time| *time > 0.0).map(f64::to_bits),
+            kerb_contact,
+            wheel_terrain,
             ..TelemetryFrame::default()
         },
         elapsed_seconds: elapsed,
         vehicle_id: i32_at(car, VEHICLE_ID),
         game_version: version,
+        suspension_deflection,
     }))
+}
+
+fn optional_number(bytes: &[u8], offset: usize, min: f64, max: f64) -> Option<f32> {
+    number(bytes, offset, "optional telemetry", min, max)
+        .ok()
+        .map(|value| value as f32)
+}
+
+fn optional_four(mut read: impl FnMut(usize) -> Option<f32>) -> Option<[f32; 4]> {
+    Some([read(0)?, read(1)?, read(2)?, read(3)?])
 }
 
 fn i32_at(bytes: &[u8], offset: usize) -> i32 {

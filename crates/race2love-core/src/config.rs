@@ -1,6 +1,7 @@
 //! Versioned TOML preferences. Runtime connection state is never persisted.
 
 use std::{
+    collections::BTreeMap,
     env,
     fs::{self, OpenOptions},
     io::{Read, Write},
@@ -35,6 +36,7 @@ pub struct Config {
     pub effects: EffectsConfig,
     pub output: OutputConfig,
     pub ui: UiConfig,
+    pub effect_profiles: BTreeMap<String, EffectsConfig>,
 }
 
 impl Default for Config {
@@ -45,6 +47,7 @@ impl Default for Config {
             effects: EffectsConfig::default(),
             output: OutputConfig::default(),
             ui: UiConfig::default(),
+            effect_profiles: BTreeMap::new(),
         }
     }
 }
@@ -119,6 +122,74 @@ impl LocalProtocol {
 pub struct EffectsConfig {
     pub engine: EngineConfig,
     pub gear_shift: GearShiftConfig,
+    pub wheel_slip: SlipConfig,
+    pub road: RoadConfig,
+    pub impact: ImpactConfig,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SlipConfig {
+    pub enabled: bool,
+    pub threshold: f32,
+    pub gain: f32,
+    pub max_intensity: f32,
+}
+impl Default for SlipConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold: 0.12,
+            gain: 1.5,
+            max_intensity: 0.6,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RoadConfig {
+    pub enabled: bool,
+    /// Suspension travel speed threshold in m/s; this also detects bumps off kerbs.
+    pub threshold_mps: f32,
+    pub gain: f32,
+    /// Minimum road cue while a loaded tyre is explicitly on a rumble strip.
+    pub kerb_intensity: f32,
+    /// High-pass vertical acceleration threshold, m/s².
+    pub acceleration_threshold_mps2: f32,
+    pub acceleration_gain: f32,
+    pub max_intensity: f32,
+}
+impl Default for RoadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold_mps: 0.25,
+            gain: 1.0,
+            kerb_intensity: 0.5,
+            acceleration_threshold_mps2: 1.0,
+            acceleration_gain: 0.12,
+            max_intensity: 0.5,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ImpactConfig {
+    pub enabled: bool,
+    /// Normalized severity; LMU maps 100 m/s² to 1 after an explicit impact event.
+    pub threshold: f32,
+    pub intensity: f32,
+}
+impl Default for ImpactConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            threshold: 0.15,
+            intensity: 0.8,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -198,6 +269,7 @@ pub struct UiConfig {
     pub start_minimized: bool,
     pub show_debug: bool,
     pub refresh_hz: u32,
+    pub show_graphs: bool,
 }
 
 impl Default for UiConfig {
@@ -206,6 +278,7 @@ impl Default for UiConfig {
             start_minimized: false,
             show_debug: false,
             refresh_hz: 30,
+            show_graphs: false,
         }
     }
 }
@@ -222,6 +295,12 @@ impl Config {
             ("engine minimum", self.effects.engine.min_intensity),
             ("engine maximum", self.effects.engine.max_intensity),
             ("shift intensity", self.effects.gear_shift.intensity),
+            ("slip threshold", self.effects.wheel_slip.threshold),
+            ("slip maximum", self.effects.wheel_slip.max_intensity),
+            ("road maximum", self.effects.road.max_intensity),
+            ("kerb intensity", self.effects.road.kerb_intensity),
+            ("impact threshold", self.effects.impact.threshold),
+            ("impact intensity", self.effects.impact.intensity),
             ("global intensity", self.output.global_intensity),
             ("maximum intensity", self.output.max_intensity),
         ] {
@@ -230,6 +309,39 @@ impl Config {
             }
         }
         let engine = &self.effects.engine;
+        for (name, value) in [
+            ("slip gain", self.effects.wheel_slip.gain),
+            ("road gain", self.effects.road.gain),
+            (
+                "road acceleration gain",
+                self.effects.road.acceleration_gain,
+            ),
+            (
+                "road acceleration threshold",
+                self.effects.road.acceleration_threshold_mps2,
+            ),
+            ("road threshold", self.effects.road.threshold_mps),
+        ] {
+            if !value.is_finite() || !(0.0..=10.0).contains(&value) {
+                return Err(invalid(&format!("{name} must be in 0..=10")));
+            }
+        }
+        if self.effect_profiles.len() > 16 {
+            return Err(invalid("at most 16 effect profiles are supported"));
+        }
+        for (name, effects) in &self.effect_profiles {
+            if name.trim().is_empty() || name.len() > 48 || name.chars().any(char::is_control) {
+                return Err(invalid(
+                    "profile names must contain 1..=48 bytes without control characters",
+                ));
+            }
+            // Validate each standalone effects profile through the same rules.
+            Self {
+                effects: effects.clone(),
+                ..Self::default()
+            }
+            .validate()?;
+        }
         if engine.start_ratio >= engine.end_ratio {
             return Err(invalid("RPM start must be below RPM end"));
         }
@@ -364,6 +476,33 @@ mod tests {
                 config
             );
         }
+    }
+
+    #[test]
+    fn effect_profiles_round_trip_and_reject_invalid_or_unbounded_data() {
+        let mut config = Config::default();
+        let mut effects = config.effects.clone();
+        effects.road.enabled = true;
+        effects.wheel_slip.gain = 2.0;
+        config.effect_profiles.insert("GT3 road".into(), effects);
+        config.ui.show_graphs = true;
+        let decoded: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(config, decoded);
+        decoded.validate().unwrap();
+        config
+            .effect_profiles
+            .get_mut("GT3 road")
+            .unwrap()
+            .road
+            .threshold_mps = f32::NAN;
+        assert!(config.validate().is_err());
+        config.effect_profiles.clear();
+        for index in 0..17 {
+            config
+                .effect_profiles
+                .insert(index.to_string(), EffectsConfig::default());
+        }
+        assert!(config.validate().is_err());
     }
 
     #[test]

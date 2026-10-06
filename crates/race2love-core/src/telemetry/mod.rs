@@ -18,14 +18,21 @@ pub struct TelemetryFrame {
     pub gear: i8,
     pub throttle: f32,
     pub brake: f32,
-    /// Dimensionless slip ratio, ordered front-left, front-right, rear-left, rear-right.
+    /// Sliding contact-patch fraction 0..=1, FL/FR/RL/RR. This is NOT a
+    /// longitudinal slip ratio. LMU exposes an approximation via mGripFract.
     pub wheel_slip: Option<[f32; 4]>,
     /// Suspension travel velocity in m/s, in the same wheel order.
     pub suspension_velocity: Option<[f32; 4]>,
-    /// Vertical acceleration in m/s², excluding gravity where the source permits.
+    /// Body-local vertical acceleration in m/s², as reported by the simulator.
     pub vertical_acceleration: Option<f32>,
     /// Explicit impact severity in 0..=1; None unless the adapter has a reliable signal.
     pub impact: Option<f32>,
+    /// Opaque event identity prevents replay of the game's retained last impact.
+    pub impact_id: Option<u64>,
+    /// Verified rumble-strip contact, FL/FR/RL/RR; not inferred from acceleration.
+    pub kerb_contact: Option<[bool; 4]>,
+    /// Simulator terrain material labels, for diagnostics only, FL/FR/RL/RR.
+    pub wheel_terrain: Option<[String; 4]>,
     pub session: Option<String>,
     pub car: Option<String>,
 }
@@ -44,6 +51,9 @@ impl Default for TelemetryFrame {
             suspension_velocity: None,
             vertical_acceleration: None,
             impact: None,
+            impact_id: None,
+            kerb_contact: None,
+            wheel_terrain: None,
             session: None,
             car: None,
         }

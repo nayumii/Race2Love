@@ -13,6 +13,7 @@ use race2love_core::{
     unit,
 };
 use race2love_lovense::{ConnectionState, LovenseControl};
+mod graphs;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -31,6 +32,8 @@ pub struct Race2LoveApp {
     config_error: Option<String>,
     lovense: Option<LovenseControl>,
     devices: Option<(Arc<dyn HapticDevice>, Arc<dyn HapticDevice>)>,
+    history: graphs::History,
+    profile_name: String,
 }
 
 impl Race2LoveApp {
@@ -50,6 +53,8 @@ impl Race2LoveApp {
             config_error: None,
             lovense: None,
             devices: None,
+            history: graphs::History::default(),
+            profile_name: "My effects".into(),
         }
     }
 
@@ -84,7 +89,7 @@ impl Race2LoveApp {
     fn header(&mut self, ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
         ui.horizontal_wrapped(|ui| {
             ui.heading("Race2Love");
-            ui.label("Phase 5 · LMU → RPM / shifts → Lovense");
+            ui.label("Phase 6 · telemetry effects and live tuning");
             ui.separator();
             for (page, title) in [
                 (Page::Dashboard, "Dashboard"),
@@ -228,6 +233,28 @@ impl Race2LoveApp {
         meter(ui, "Mixed effects", snapshot.effects.mixed);
         meter(ui, "Scaled target", snapshot.effects.intensity);
         meter(ui, "Acknowledged device target", snapshot.device.intensity);
+        let levels = snapshot.effects.levels;
+        ui.horizontal(|ui| {
+            indicator(
+                ui,
+                levels
+                    .last_shift
+                    .is_some_and(|at| at.elapsed() < Duration::from_millis(500)),
+                "Shift detected",
+            );
+            ui.label(format!("{} shifts since effects reset", levels.shift_count));
+        });
+        egui::CollapsingHeader::new("Individual effects").show(ui, |ui| {
+            for (name, value) in [
+                ("Engine", levels.engine),
+                ("Gear pulse", levels.gear_shift),
+                ("Wheel slip", levels.wheel_slip),
+                ("Kerbs / road", levels.road),
+                ("Impact", levels.impact),
+            ] {
+                meter(ui, name, value);
+            }
+        });
         if self
             .devices
             .as_ref()
@@ -267,8 +294,21 @@ impl Race2LoveApp {
                     "Vertical acceleration (m/s²): {:?}",
                     frame.vertical_acceleration
                 ));
-                ui.monospace(format!("Explicit synthetic impact: {:?}", frame.impact));
+                ui.monospace(format!(
+                    "Impact severity / event: {:?} / {:?}",
+                    frame.impact, frame.impact_id
+                ));
+                ui.monospace(format!("Rumble-strip contact: {:?}", frame.kerb_contact));
+                ui.monospace(format!("Tyre terrain: {:?}", frame.wheel_terrain));
+                ui.monospace(format!(
+                    "Road vibration (m/s²): {:?}",
+                    snapshot.effects.levels.road_vibration
+                ));
             }
+        }
+        ui.checkbox(&mut self.config.ui.show_graphs, "Show live graphs");
+        if self.config.ui.show_graphs {
+            self.history.show(ui, std::time::Instant::now());
         }
     }
 
@@ -323,18 +363,58 @@ impl Race2LoveApp {
                 shift.attack_ms + shift.hold_ms + shift.release_ms
             ));
         });
-        ui.small("Adjacent forward gears generate pulses. Neutral, reverse and reconnects do not.");
+        ui.small("Adjacent forward shifts count, including a brief neutral transition (up to 250 ms). Long neutral, reverse and reconnects reset detection.");
         ui.small(format!(
             "Output updates at {} Hz. Pulses shorter than {:.0} ms may be missed.",
             self.config.output.update_hz,
             1000.0 / f64::from(self.config.output.update_hz)
         ));
         ui.separator();
-        ui.heading("Further effects · Phase 6");
-        ui.label(
-            "Wheel slip, kerbs and collisions need verified LMU signals before they drive output.",
-        );
-        ui.label("Demo already exposes synthetic versions of these signals in the debug display.");
+        egui::CollapsingHeader::new("Wheel slip").show(ui, |ui| {
+            let slip = &mut self.config.effects.wheel_slip;
+            ui.checkbox(&mut slip.enabled, "Enable wheel slip");
+            percentage_slider(ui, &mut slip.threshold, "Sliding contact threshold", 0.0..=1.0);
+            ui.add(egui::Slider::new(&mut slip.gain, 0.0..=10.0).text("Slip gain"));
+            percentage_slider(ui, &mut slip.max_intensity, "Slip maximum intensity", 0.0..=1.0);
+            ui.small("LMU: maximum loaded-wheel sliding contact fraction (not longitudinal slip ratio). Active above 3 m/s.");
+        });
+        egui::CollapsingHeader::new("Kerbs / road").show(ui, |ui| {
+            let road = &mut self.config.effects.road;
+            ui.checkbox(&mut road.enabled, "Enable kerbs / road");
+            ui.add(egui::Slider::new(&mut road.threshold_mps, 0.0..=5.0).text("Travel speed threshold (m/s)"));
+            ui.add(egui::Slider::new(&mut road.gain, 0.0..=10.0).text("Road gain"));
+            percentage_slider(ui, &mut road.kerb_intensity, "Kerb contact intensity", 0.0..=1.0);
+            percentage_slider(ui, &mut road.max_intensity, "Road maximum intensity", 0.0..=1.0);
+            ui.add(egui::Slider::new(&mut road.acceleration_threshold_mps2, 0.0..=10.0).text("Vertical vibration threshold (m/s²)"));
+            ui.add(egui::Slider::new(&mut road.acceleration_gain, 0.0..=2.0).text("Vertical vibration gain"));
+            ui.small("Road feedback uses suspension movement and vertical vibration, even when LMU leaves rumble-strip flags false. Explicit loaded-tyre kerb contact also supplies kerb intensity. All are capped by Road maximum and active above 3 m/s. Bumps/grass can also trigger this effect.");
+        });
+        egui::CollapsingHeader::new("Collision / impact").show(ui, |ui| {
+            let impact = &mut self.config.effects.impact;
+            ui.checkbox(&mut impact.enabled, "Enable impacts");
+            percentage_slider(ui, &mut impact.threshold, "Impact severity threshold", 0.0..=1.0);
+            percentage_slider(ui, &mut impact.intensity, "Impact pulse intensity", 0.0..=1.0);
+            ui.small("LMU: a new explicit impact event, with acceleration / 100 m/s² as estimated severity. One pulse per event; braking alone cannot trigger it.");
+        });
+        egui::CollapsingHeader::new("Effect profiles").show(ui, |ui| {
+            ui.small("Profiles contain effects only. Device settings and global safety limits stay as configured.");
+            egui::ComboBox::from_id_salt("effect_profile").selected_text(&self.profile_name).show_ui(ui, |ui| {
+                for name in self.config.effect_profiles.keys() { ui.selectable_value(&mut self.profile_name, name.clone(), name); }
+            });
+            ui.add(egui::TextEdit::singleline(&mut self.profile_name).char_limit(48));
+            ui.horizontal(|ui| {
+                let name = self.profile_name.trim().to_owned();
+                let valid = !name.is_empty() && name.len() <= 48 && !name.chars().any(char::is_control);
+                let room = self.config.effect_profiles.contains_key(&name) || self.config.effect_profiles.len() < 16;
+                if ui.add_enabled(valid && room, egui::Button::new("Store profile")).clicked() {
+                    self.config.effect_profiles.insert(name.clone(), self.config.effects.clone());
+                }
+                if ui.add_enabled(self.config.effect_profiles.contains_key(&name), egui::Button::new("Apply profile")).clicked() {
+                    self.config.effects = self.config.effect_profiles[&name].clone();
+                }
+                if ui.button("Delete profile").clicked() { self.config.effect_profiles.remove(&name); }
+            });
+        });
         ui.add_space(12.0);
         percentage_slider(
             ui,
@@ -517,7 +597,7 @@ impl Race2LoveApp {
                 .text("Telemetry timeout (ms)"),
         );
         ui.small("Defaults: telemetry/effects 60 Hz, output 25 Hz, UI 30 Hz. Higher rates consume more CPU.");
-        ui.small("Minimize-to-tray and automatic launch are not implemented in Phase 1.");
+        ui.small("Minimize-to-tray and automatic launch are not implemented.");
         ui.separator();
         ui.label("TOML configuration");
         if let Some(path) = &self.config_path {
@@ -536,6 +616,15 @@ impl eframe::App for Race2LoveApp {
             self.control.emergency_stop();
         }
         let snapshot = self.control.snapshot();
+        if self.config.ui.show_graphs {
+            self.history.capture(
+                &snapshot,
+                std::time::Instant::now(),
+                Duration::from_millis(self.config.output.telemetry_timeout_ms),
+            );
+        } else {
+            self.history.clear();
+        }
         let before = self.config.clone();
         egui::Frame::central_panel(ui.style()).show(ui, |ui| {
             self.header(ui, &snapshot);

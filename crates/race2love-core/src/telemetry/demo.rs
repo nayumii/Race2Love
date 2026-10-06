@@ -63,6 +63,9 @@ impl DemoSource {
             }),
             vertical_acceleration: Some(vertical),
             impact: Some(if impact { 0.85 } else { 0.0 }),
+            impact_id: impact.then_some((time / 24.0) as u64 + 1),
+            kerb_contact: Some([kerb, false, kerb, false]),
+            wheel_terrain: None,
             session: Some("Demo • simulated practice".into()),
             car: Some("Demo prototype".into()),
         }

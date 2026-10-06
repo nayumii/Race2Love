@@ -6,13 +6,15 @@ Ultimate → Lovense Remote/Game Mode**, on Linux with Steam/Proton and Windows
 10/11. The design uses no SimHub, Electron, browser frontend, or mandatory cloud
 service.
 
-**Phase 5 implementation:** the application starts with **Demo telemetry** and an
+**Phase 6 implementation:** the application starts with **Demo telemetry** and an
 **in-memory mock device**. The local Lovense backend is available through an
 explicit Connect and toy selection. **Direct Windows and Proton LMU** is selectable on
 Dashboard or with `--lmu`. The owner reports
 successful Lovense hardware testing, live Proton LMU output after Resume, and the
 corrected Windows build working. RPM/gear effects, the priority mixer and global
-scaling share one pipeline across both platforms. See [validation status](docs/VALIDATION.md)
+scaling share one pipeline across both platforms. Optional wheel-slip, road and
+impact effects, bounded live graphs and named effect profiles are now available.
+See [effect signals and tuning](docs/EFFECTS.md). See [validation status](docs/VALIDATION.md)
 for automated checks, live telemetry reports and remaining acceptance.
 
 ## Try Demo
@@ -170,9 +172,9 @@ choices, not measured latency/CPU guarantees. Lovense commands expire after two 
 and CPU/latency still require measurement.
 
 Demo simulates a 24-second driving cycle with RPM ramps, up/downshifts, braking,
-slip, kerbs, and occasional explicit impacts. Slip, suspension velocity, vertical
-acceleration, and impact signals are **synthetic debug values only** through Phase 5.
-They do not drive additional effects yet. No rolling graph history is stored.
+slip, kerbs, and occasional explicit impacts. Enable the additional effects in
+Effects to try them; they default off. Dashboard offers optional 20-second live
+graphs, effect meters and a shift counter. Demo and LMU use the same effect engine.
 
 ## Configuration and logging
 
@@ -253,9 +255,12 @@ reduces torn reads but cannot guarantee a fully atomic producer transaction.
 not expose a supported backing descriptor can prevent access. These conditions
 appear on Dashboard and leave output stopped. See [LMU.md](docs/LMU.md) for exact
 heuristics, synchronization limits, reference licenses and test status.
-Wheel slip, kerb, and collision effects will stay optional until their LMU values,
-units, availability, and false-positive behavior are verified. Details are in
-[adapter plans](docs/ADAPTERS.md).
+Wheel slip uses the SDK sliding contact-patch fraction. Road feedback combines
+suspension travel speed, high-pass vertical acceleration and explicit rumble-strip
+contact when provided. Some LMU tracks leave that flag false, so road feedback
+does not depend on it. Impact pulses require a new game-reported impact event.
+These effects are opt-in; [signal definitions and tuning](docs/EFFECTS.md) explain
+their limitations and sensitivity controls.
 
 ## Lovense setup
 
@@ -313,16 +318,16 @@ LMU or toy is required.
 Linux and platform compile checks. GitHub CI checks Linux and native Windows/MSVC
 on push and pull requests; the new workflow has not run in this local session.
 
-**Next step (Phase 6):** verify and normalize the SDK's available wheel/road/impact
-signals, implement effects only for reliable telemetry, and add bounded live
-graphs for tuning. The first LMU → RPM/gear effects → mixer → Lovense pipeline is
-implemented for Windows and Proton. Physical fault checks during game exit,
-device reconnect and shutdown, plus latency/default tuning, remain separate
-acceptance work.
+**Next acceptance step:** tune the road vibration threshold/gain against actual
+kerbs and ordinary tarmac on your tracks. Use Dashboard debug and graphs, then
+save effects in a named profile. The latest fallback is regression-tested; its
+physical feel still needs confirmation. Gear shifts now bridge brief neutral
+samples (up to 250 ms), with a visible shift counter for diagnosis.
 
 Known limits: native MSVC build validation and native Wayland runtime checks
-remain; broader Windows/Lovense fault acceptance is unrecorded; no slip,
-kerb, collision effects, graphs, tray, autostart, or named profiles. CPU usage and
+remain; broader Windows/Lovense fault acceptance is unrecorded. Road vibration
+also responds to bumps/grass and is not a kerb classifier. Impact severity is an
+acceleration estimate. Tray and autostart are not implemented. CPU usage and
 end-to-end latency have not been benchmarked.
 
 ## License

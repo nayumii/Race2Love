@@ -100,12 +100,11 @@ remains in [VALIDATION.md](VALIDATION.md).
 
 ## Phase 6: Additional signals
 
-Every generator must document its exact verified LMU signal and normalization.
-Kerbs might use suspension velocity or vertical acceleration if validated; a
-collision detector must avoid ordinary suspension/kerb false positives. Optional
-signals stay unavailable until the adapter can supply meaningful values. The
-synthetic Demo slip/kerb/impact fields do not justify inventing an LMU source.
+Implemented: sliding contact fraction, suspension travel derivative, vertical
+vibration and explicit impact events. See [EFFECTS.md](EFFECTS.md) for the SDK
+fields and limitations. Unknown/malformed optional signals stay unavailable.
 
-Use a fixed-capacity rolling graph history. Add `egui_plot` only when graphs are
-implemented and its release compatibility/maintenance is checked. Tray support,
-autostart and profiles remain separate optional improvements.
+Graphs use the existing egui painter with at most 400 points, sampled at 20 Hz.
+Named effect profiles store only effect settings (up to 16 profiles). No new
+crate, worker, simulator or device backend was introduced. Tray/autostart remain
+separate work.

@@ -63,9 +63,75 @@ fn player_selection_offsets_units_and_optional_availability() {
         assert_eq!((frame.throttle, frame.brake), (0.75, 0.125));
         assert_eq!(frame.car.as_deref(), Some("GT3 car"));
         assert_eq!(frame.session.as_deref(), Some("Race · Spa"));
-        assert!(frame.wheel_slip.is_none() && frame.suspension_velocity.is_none());
-        assert!(frame.vertical_acceleration.is_none() && frame.impact.is_none());
+        assert_eq!(frame.wheel_slip, Some([0.0; 4]));
+        assert!(frame.suspension_velocity.is_none()); // Requires two game-clock samples.
+        assert_eq!(frame.vertical_acceleration, Some(0.0));
+        assert_eq!(frame.impact, Some(0.0));
     }
+}
+
+#[test]
+fn lmu_gear_shift_through_neutral_reaches_the_effect_engine() {
+    let start = Instant::now();
+    let mut engine = race2love_core::effects::EffectEngine::default();
+    let mut config = Config::default();
+    config.effects.engine.enabled = false;
+    for (ms, gear) in [(0, 3_i32), (20, 0), (40, 4), (60, 4)] {
+        let mut bytes = fixture(0, 10.0 + ms as f64 / 1000.0);
+        bytes[VEHICLES + GEAR..VEHICLES + GEAR + 4].copy_from_slice(&gear.to_le_bytes());
+        let now = start + Duration::from_millis(ms);
+        let frame = decode(&bytes, now).unwrap().unwrap().frame;
+        let output = engine.update(&frame, &config.effects, now);
+        if ms == 60 {
+            assert!(output > 0.8);
+            assert_eq!(engine.levels().shift_count, 1);
+        }
+    }
+}
+
+#[test]
+fn optional_wheel_and_event_fields_have_verified_units_and_fail_independently() {
+    let mut bytes = fixture(5, 123.5);
+    let base = VEHICLES + 5 * VEHICLE_SIZE;
+    for index in 0..4 {
+        let wheel = base + WHEELS + index * WHEEL_SIZE;
+        put_float(&mut bytes, wheel + SLIDING_FRACTION, 0.1 * index as f64);
+        put_float(&mut bytes, wheel + TIRE_LOAD, 1_000.0);
+        put_float(
+            &mut bytes,
+            wheel + SUSPENSION_DEFLECTION,
+            0.02 * index as f64,
+        );
+        bytes[wheel + SURFACE_TYPE] = if index == 2 { 5 } else { 0 };
+    }
+    put_float(&mut bytes, base + ACCELERATION + 8, 30.0);
+    put_float(&mut bytes, base + LAST_IMPACT_TIME, 123.4);
+    let decoded = decode(&bytes, Instant::now()).unwrap().unwrap();
+    assert_eq!(decoded.frame.wheel_slip, Some([0.0, 0.1, 0.2, 0.3]));
+    assert_eq!(decoded.suspension_deflection, Some([0.0, 0.02, 0.04, 0.06]));
+    assert_eq!(
+        decoded.frame.kerb_contact,
+        Some([false, false, true, false])
+    );
+    assert_eq!(decoded.frame.vertical_acceleration, Some(30.0));
+    assert_eq!(decoded.frame.impact, Some(0.3));
+    assert_eq!(decoded.frame.impact_id, Some(123.4_f64.to_bits()));
+    put_float(&mut bytes, base + WHEELS + SLIDING_FRACTION, f64::NAN);
+    put_float(&mut bytes, base + ACCELERATION + 8, f64::INFINITY);
+    let decoded = decode(&bytes, Instant::now()).unwrap().unwrap();
+    assert!(decoded.frame.wheel_slip.is_none());
+    assert!(decoded.frame.vertical_acceleration.is_none() && decoded.frame.impact.is_none());
+    assert_eq!(decoded.frame.gear, 4); // Malformed optional fields do not break RPM/gear.
+    put_float(&mut bytes, base + ACCELERATION + 8, 30.0);
+    put_float(&mut bytes, base + LAST_IMPACT_TIME, 100.0);
+    assert_eq!(
+        decode(&bytes, Instant::now())
+            .unwrap()
+            .unwrap()
+            .frame
+            .impact,
+        Some(0.0)
+    );
 }
 
 #[test]
@@ -261,4 +327,104 @@ async fn lmu_pipeline_stops_on_freeze_player_exit_and_game_restart() {
     wait_for(|| device.intensity() > 0.0).await;
     runtime.shutdown().await;
     assert_eq!(device.intensity(), 0.0);
+}
+
+#[test]
+fn suspension_derivative_uses_game_time_and_resets_across_discontinuities() {
+    struct BytesReader(Vec<u8>);
+    impl SnapshotReader for BytesReader {
+        fn connect(&mut self) -> Result<(), TelemetryError> {
+            Ok(())
+        }
+        fn disconnect(&mut self) {}
+        fn is_connected(&self) -> bool {
+            true
+        }
+        fn snapshot(&mut self, destination: &mut [u8]) -> Result<bool, TelemetryError> {
+            destination.copy_from_slice(&self.0[..PAYLOAD_SIZE]);
+            Ok(true)
+        }
+    }
+    let start = Instant::now();
+    let mut source = LmuSource::new(BytesReader(fixture(0, 10.0)));
+    source.connect().unwrap();
+    assert!(source.read_at(start).unwrap().is_none());
+    put_float(&mut source.reader.0, VEHICLES + ELAPSED, 10.02);
+    put_float(
+        &mut source.reader.0,
+        VEHICLES + WHEELS + SUSPENSION_DEFLECTION,
+        0.01,
+    );
+    let frame = source
+        .read_at(start + Duration::from_millis(40))
+        .unwrap()
+        .unwrap();
+    assert!((frame.suspension_velocity.unwrap()[0] - 0.5).abs() < 0.001);
+    assert!(
+        source
+            .read_at(start + Duration::from_millis(50))
+            .unwrap()
+            .is_none()
+    );
+    put_float(&mut source.reader.0, VEHICLES + ELAPSED, 11.0);
+    assert!(
+        source
+            .read_at(start + Duration::from_millis(60))
+            .unwrap()
+            .unwrap()
+            .suspension_velocity
+            .is_none()
+    );
+    put_float(&mut source.reader.0, VEHICLES + ELAPSED, 1.0);
+    assert!(matches!(
+        source.read_at(start + Duration::from_millis(80)),
+        Err(TelemetryError::Waiting(_))
+    ));
+    put_float(&mut source.reader.0, VEHICLES + ELAPSED, 1.02);
+    assert_eq!(
+        source
+            .read_at(start + Duration::from_millis(100))
+            .unwrap()
+            .unwrap()
+            .suspension_velocity,
+        Some([0.0; 4])
+    );
+    put_float(&mut source.reader.0, VEHICLES + ELAPSED, 1.04);
+    put_float(&mut source.reader.0, VEHICLES + WHEELS, f64::NAN);
+    assert!(
+        source
+            .read_at(start + Duration::from_millis(120))
+            .unwrap()
+            .unwrap()
+            .suspension_velocity
+            .is_none()
+    );
+    put_float(&mut source.reader.0, VEHICLES + ELAPSED, 1.06);
+    put_float(&mut source.reader.0, VEHICLES + WHEELS, 0.0);
+    assert!(
+        source
+            .read_at(start + Duration::from_millis(140))
+            .unwrap()
+            .unwrap()
+            .suspension_velocity
+            .is_none()
+    );
+}
+
+#[test]
+fn terrain_names_are_diagnostic_and_unloaded_tyres_do_not_report_contact() {
+    let mut bytes = fixture(0, 1.0);
+    let wheel = VEHICLES + WHEELS;
+    bytes[wheel + TERRAIN_NAME..wheel + TERRAIN_NAME + 5].copy_from_slice(b"KERB\0");
+    let decode_frame = |bytes: &[u8]| decode(bytes, Instant::now()).unwrap().unwrap().frame;
+    let frame = decode_frame(&bytes);
+    assert_eq!(frame.wheel_terrain.unwrap()[0], "KERB");
+    assert_eq!(frame.kerb_contact, Some([false; 4])); // Never guess contact from a name.
+    bytes[wheel + SURFACE_TYPE] = 5;
+    assert_eq!(decode_frame(&bytes).kerb_contact, Some([false; 4]));
+    put_float(&mut bytes, wheel + TIRE_LOAD, 500.0);
+    assert_eq!(
+        decode_frame(&bytes).kerb_contact,
+        Some([true, false, false, false])
+    );
 }

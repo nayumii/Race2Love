@@ -1,3 +1,34 @@
+# Phase 6 and kerb fallback validation
+
+Recorded 2026-10-06, Rust/Cargo 1.94.1. Formatting, workspace/all-target checks
+and strict Clippy pass for Linux and Windows GNU. All **85 Linux tests** pass
+(37 core, four GUI, 19 LMU, six Lovense unit, 19 fake Remote). All **80 Windows
+tests** pass as MinGW binaries under isolated Wine (14 LMU tests on that target).
+This does not replace native Windows/MSVC or physical-device acceptance.
+
+New regressions cover neutral-bridged shifts through decoded LMU telemetry and
+the fake Remote pipeline, independent slip/road/impact generators, retained
+impact events, malformed optional data, suspension derivatives using game time,
+discontinuities, terrain labels, loaded-wheel contact, bounded graph history,
+profile serialization and limits. Road tests cover **all kerb flags false**,
+alternating vertical acceleration, constant baseline rejection, gaps and engine
+mixing headroom. No new dependencies or output-task architecture were introduced.
+
+The owner reported working grass feedback but almost absent kerb feedback, with
+all rumble-strip flags false. The new vertical-vibration fallback addresses that
+missing flag without inventing material classifications. Actual kerb feel and
+false-positive tuning are **not yet confirmed**. Gear display was reported working;
+the brief-neutral failure was reproduced synthetically, not captured from live LMU.
+
+The installed SDK was inspected during implementation and the initial wheel,
+acceleration and impact assertions compiled against its Windows x64 headers.
+A later recheck (including the new terrain-name assertion) could not run because
+the supplied LMU installation path no longer contained the SDK. Re-run
+`tools/verify-lmu-layout.cpp` against the current installation after game updates.
+No proprietary headers or captured game data were added to the repository.
+
+Earlier validation records below describe their respective revisions.
+
 # Pattern cycling correction
 
 The owner reported both Pattern modes cycling from low to maximum intensity.
