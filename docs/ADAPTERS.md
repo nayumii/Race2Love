@@ -1,7 +1,7 @@
 # Adapter implementation plan
 
-The Lovense backend and Windows LMU acquisition are implemented. Proton acquisition
-and additional LMU signals remain future work.
+The Lovense backend and direct Windows/Proton LMU acquisition are implemented.
+Additional LMU signals remain future work.
 
 ## Phase 2: Lovense local backend
 
@@ -40,27 +40,29 @@ simulator provides a usable signal.
 
 ## Phase 4: Linux / Proton LMU
 
-Research reference: [fpauker/lmu-rpm-leds](https://github.com/fpauker/lmu-rpm-leds).
-Its README documents LMU's SDK header, plugin-adapter process, packed telemetry,
-and Wine memfd access via `/proc/<pid>/fd/<n>`. Its license is GPL-3.0-or-later.
-It is not a dependency and no code/offset implementation has been copied.
+`linux.rs` implements `SnapshotReader` using safe, bounded positioned reads.
+`linux/proc.rs` discovers same-user game processes and associates plugin adapters
+by Wine prefix or parent PID. Backing descriptors are filtered by Wine's memfd or
+temporary-file convention, size, and the shared decoder's verified layout. Live
+simulation clocks disambiguate retained copies; RPM changes are not required.
 
-Discover the relevant user's LMU/Wine processes and candidate descriptors at a
-low rate while disconnected; read telemetry at the separately configured rate
-when connected. No hardcoded Steam library path, Proton version or PID. Mapping
-discovery alone is insufficient: use the Phase 3 parser's version/size/consistency
-checks and ensure samples belong to the player car. Handle process restart,
-descriptor replacement, mapping closure and changed layouts as recoverable errors.
+Process start times, zombie state, fd device/inode, and backing size are checked
+before and after reads. Exit, PID reuse, descriptor closure/replacement and
+truncation disconnect safely, even while Race2Love retains a readable file.
+The generic source worker handles bounded reconnect and telemetry timeout.
 
-Use safe bounded reads where possible. If read-only mmap is required, isolate
-unsafe mapping access and assess game truncation/SIGBUS races; do not assume a
-mapping remains valid just because opening it succeeded. Document Wine memfd
-heuristics as implementation details rather than a stable public Wine ABI.
+Two matching compact reads reduce inconsistent samples without writing Wine
+memory. They do not provide the Windows SDK lock's atomicity guarantee. This
+platform-specific limitation is documented in [LMU.md](LMU.md), alongside `/proc`
+permissions and unsupported Wine backing arrangements. No unsafe Linux mapping,
+fixed Steam path, Proton version, root requirement or telemetry bridge is added.
 
-Access can be blocked by `/proc` restrictions, user mismatch, Steam/app sandbox
-boundaries or a changed Wine implementation. Report these conditions and leave
-output stopped. Root privileges and an external telemetry bridge are not part of
-the design.
+Linux fixtures exercise discovery, foreign-prefix exclusion, malformed backing,
+PID/fd replacement, truncation, inconsistent reads, selection by clock progress,
+actual memfd access through `/proc`, and the full mock pipeline's stop/reconnect.
+The only added direct dependency is test-only `rustix` for safe memfd creation;
+production Linux acquisition uses the standard library. Reference code was not
+copied. See [VALIDATION.md](VALIDATION.md) for live acceptance status.
 
 ## Phase 6: Additional signals
 

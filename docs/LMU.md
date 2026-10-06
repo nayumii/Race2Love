@@ -1,14 +1,15 @@
 # Native Le Mans Ultimate telemetry
 
-Phase 3 implements Windows acquisition in `race2love-lmu`. Linux offers Demo;
-Proton acquisition is Phase 4. Both platforms use the same safe byte decoder.
-No SimHub, third-party game DLL, bridge or elevation is required on Windows.
+Phases 3–4 implement Windows and Linux/Proton acquisition in `race2love-lmu`.
+Both platforms share the safe decoder and freshness logic. No SimHub, third-party
+game DLL, bridge or elevation is required.
 
-## Windows use
+## Use
 
 1. Enable LMU **Settings → Gameplay → Enable Plugins**, then restart the game.
    This switch also governs its native shared-memory interface.
-2. Select **Le Mans Ultimate** on Dashboard, or launch `race2love.exe --lmu`.
+2. Select **Le Mans Ultimate** on Dashboard, or launch `race2love --lmu`
+   (`race2love.exe --lmu` on Windows).
    Default launch remains Demo with mock output.
 3. Enter the player's car in a driving session. Dashboard shows session/track,
    car, speed, RPM/max RPM, gear, throttle and brake when simulation time advances.
@@ -19,9 +20,21 @@ Missing-game discovery retries once per second; identical errors are not logged
 on every attempt. Monitor/non-realtime/vehicle exit clear old output while keeping
 the game connection available and polling at 1 Hz. Resuming a session can take up
 to two polls to establish advancing samples. Pausing releases handles. Run both
-programs as the same normal user in the same Windows desktop session. Access
+programs as the same normal user (and the same desktop session on Windows). Access
 errors appear on Dashboard; elevation is not part of the intended setup.
-Linux `--lmu` reports Phase 4 availability without silently substituting Demo.
+On Linux, launch LMU normally through Steam/Proton as the same user. Race2Love
+needs no Steam-library or Proton-path setting. Linux source selection uses direct
+telemetry and does not silently substitute Demo.
+
+For read-only diagnostics without a window or device connection:
+
+```sh
+cargo run --locked -p race2love-lmu --example telemetry_probe -- 30
+```
+
+The bounded probe runs for the supplied number of seconds (1–600), reports fresh
+frames and normalized values once per second, and disconnects on completion. It
+uses the same native adapter and never creates a haptic backend or HTTP client.
 
 ## Contract and values
 
@@ -88,6 +101,59 @@ another reader retains old mappings. RAII releases handles/views on failure,
 disconnect and shutdown. Unsafe code is isolated to this module. Discovery/reads
 run in a dedicated Tokio blocking worker, separate from effects, HTTP and GUI.
 
+### Linux / Proton access
+
+`linux/proc.rs` enumerates numeric `/proc` entries owned by the current user.
+It matches executable arguments exactly (`Le Mans Ultimate.exe` or
+`LeMansUltimate.exe`, including Wine loader arguments), avoiding substring matches
+against unrelated command lines. `PluginsAdapter.exe` is eligible only with the
+same nonempty `WINEPREFIX` or a direct game-parent relationship. Environment reads
+retain only the prefix and never log other values. Multiple game instances are
+rejected until the user closes the extra instance.
+
+The reader opens existing `/proc/<owner-pid>/fd/<n>` **read-only**. Wine backing
+names include `/memfd:wine-mapping (deleted)` and the older/fallback deleted
+`tmpmap-xxxxxxxx` files. Names do not reveal the Windows mapping name: every
+candidate must have the SDK allocation size (324824 bytes), or up to its 4 KiB
+page-rounded size (327680), and pass the shared decoder at container offset zero.
+Unrelated, truncated, oversized or unknown-layout files are rejected. This reader
+supports the complete native container, not arbitrary telemetry fragments or
+large memory scans. Identical device/inode candidates are deduplicated.
+
+If several valid live-player copies exist, discovery observes simulation-clock
+progress for at most 150 ms and prefers an advancing copy. Constant RPM is valid.
+Menu/frozen mappings can connect but cannot generate fresh output. Discovery caps
+process entries (32768), matching processes (32), descriptors per owner (4096),
+and accepted candidates (16); it runs on the separate telemetry worker. Retry
+remains once per second. Connected polling uses the configured telemetry rate.
+
+Every read checks game/owner start time and zombie state, then fd device/inode and
+size, both before and after copying. PID reuse, game/adapter exit, descriptor
+closure/replacement and truncation disconnect and rediscover. An owned file
+keeping old data alive is insufficient to keep the source connected. `pread`
+(`FileExt::read_exact_at`) avoids mmap's possible SIGBUS on concurrent truncation;
+short reads become recoverable errors. Linux adds no unsafe code or runtime crate.
+
+**Synchronization limitation:** Wine's named SDK lock and gate objects are not
+identifiable through the anonymous data descriptor. Race2Love neither guesses a
+lock file nor modifies the producer's memory. It reads version, scoring prefix,
+telemetry header and the selected vehicle prefix twice and accepts only identical
+results. A change skips the tick without waiting or retrying in a tight loop.
+The event queue is not a monotonic version counter; rapidly changing FFB and unused
+vehicles are excluded. Repeated reads reduce torn snapshots but cannot prove atomic
+transactions if a writer pauses partway through an update. Basic fields still
+undergo finite/range checks and the shared clock watchdog. Stronger guarantees
+would require a verified Wine synchronization interface or producer sequence lock;
+this is a documented platform constraint, not an SDK-lock claim.
+
+Access may fail under `hidepid`, ptrace/dumpability restrictions, a different user,
+or Steam/app sandbox boundaries. Wine versions can change their backing names or
+keep no usable descriptor in the game/associated adapter; those configurations
+report an availability error and stay stopped. There is no root, `/proc/PID/mem`,
+Wine-server protocol or external bridge fallback. Use the normal desktop user and
+an installation where Race2Love can see the game's `/proc` entries. A game update
+outside the supported layout requires new SDK verification.
+
 Every connection requires two different observed simulation timestamps before
 publishing. Duplicate `(vehicle ID, elapsed time)` returns no fresh frame; reopening
 frozen memory cannot renew output. After two seconds without progress, mappings
@@ -97,8 +163,11 @@ flags clear output immediately. Source generations travel through controls,
 telemetry and effects so old-source values cannot cross a switch, even with an
 immediate Resume. Manual Test remains an explicit one-second telemetry exception.
 
-One 324820-byte snapshot buffer is retained: about 19.5 MB/s of copies at 60 Hz,
-without a frame queue. CPU and end-to-end latency need real-hardware measurement.
+One 324820-byte owned snapshot buffer is retained without a frame queue. Windows
+copies that buffer under the SDK lock (about 19.5 MB/s at 60 Hz). Linux reads only
+used prefixes twice, at most 1326 bytes per tick (about 80 KB/s at 60 Hz), and
+writes them into the shared-layout buffer. Adding decoded fields requires extending
+those prefixes/consistency checks. CPU and end-to-end latency need live measurement.
 
 ## Sources and verification
 
@@ -116,6 +185,17 @@ redistributed, and no GPL code was incorporated.
   GPL-3.0-or-later: outer padding, SDK lock objects/protocol and process lifetime.
 - [fpauker/lmu-rpm-leds](https://github.com/fpauker/lmu-rpm-leds/tree/e0802f16a88a23731d8402f884e1e02f62fd6c0a),
   GPL-3.0-or-later: independent RPM/gear/elapsed offsets and Proton discovery research.
+- [Wine mapping implementation](https://github.com/wine-mirror/wine/blob/master/server/mapping.c),
+  LGPL-2.1-or-later: anonymous `wine-mapping` memfds, fallback `tmpmap-*` files and
+  page rounding; [Proton 10 Wine source](https://github.com/ValveSoftware/wine/blob/proton_10.0/server/mapping.c)
+  also confirms the older deleted-file backing. These are implementation details,
+  not a stable public Wine ABI.
+- [Linux /proc documentation](https://docs.kernel.org/filesystems/proc.html):
+  process lifetime, descriptors, start times and access restrictions.
+- [Bytecode Alliance rustix](https://github.com/bytecodealliance/rustix),
+  Apache-2.0/MIT with LLVM exception: maintained safe POSIX bindings, added only as
+  a Linux test dependency for real memfd fixtures. Existing lockfile version 1.1.5
+  is reused; production Linux acquisition has no added dependency.
 - [Microsoft MapViewOfFile](https://learn.microsoft.com/en-us/windows/win32/api/memoryapi/nf-memoryapi-mapviewoffile)
   and [WaitForSingleObject](https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject):
   rights, bounded views and nonblocking lifetime checks.
@@ -128,8 +208,14 @@ shutdown through the actual pipeline. Windows-only fixtures create isolated name
 sections/events and a disposable process: read-only protection, contention and
 wakeup, missing/undersized mappings and process exit with a retained mapping.
 
+Linux acquisition has process/filesystem fixtures and a real `/proc` memfd test,
+plus full-pipeline freeze, player exit, process loss, reconnect and shutdown checks.
+The real Linux/Proton game (marker 14200) was checked in a driving session through
+the dashboard and read-only probe, at about 60 fresh frames/s. The owner also
+confirmed live Lovense output after Resume. Broader physical fault/latency
+acceptance remains; see the detailed validation record.
 Windows code/tests compile and pass Clippy from Linux. Executing Windows fixtures
-and testing LMU itself remain native Windows acceptance work. The installed SDK
+and testing LMU on Windows remain native Windows acceptance work. The installed SDK
 was verified once the owner's installation finished; all used offsets and sizes
 passed C++ static assertions targeting the Windows x64 ABI. See
 [VALIDATION.md](VALIDATION.md) for exact status. Live acceptance: compare headers,

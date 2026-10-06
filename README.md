@@ -6,12 +6,12 @@ Ultimate → Lovense Remote/Game Mode**, on Linux with Steam/Proton and Windows
 10/11. The design uses no SimHub, Electron, browser frontend, or mandatory cloud
 service.
 
-**Phase 3 implementation:** the application starts with **Demo telemetry** and an
+**Phase 4 implementation:** the application starts with **Demo telemetry** and an
 **in-memory mock device**. The local Lovense backend is available through an
-explicit Connect and toy selection. **Native Windows LMU** is selectable on
-Dashboard or with `--lmu`; Linux/Proton acquisition is Phase 4. The owner reports
-a successful Lovense hardware test. See [validation status](docs/VALIDATION.md)
-for automated checks and remaining live Windows validation.
+explicit Connect and toy selection. **Direct Windows and Proton LMU** is selectable on
+Dashboard or with `--lmu`. The owner reports
+successful Lovense hardware testing and live Proton LMU output after Resume. See [validation status](docs/VALIDATION.md)
+for automated checks, live Linux telemetry verification and remaining acceptance.
 
 ## Try Demo
 
@@ -29,7 +29,7 @@ cargo run --locked -- --demo
 The native window has three views:
 
 - **Dashboard:** live speed, RPM, gear, throttle, brake, connection indicators,
-  mixed/scaled/applied output, Demo/Windows LMU selection, telemetry pause, and
+  mixed/scaled/applied output, Demo/LMU selection, telemetry pause, and
   global intensity controls.
 - **Effects:** RPM thresholds expressed as percentages of maximum RPM, vibration
   range, linear/exponential/logarithmic curves, and shift pulse envelopes.
@@ -99,7 +99,7 @@ Normal Windows GNU builds use MinGW. Native MSVC build/runtime validation remain
 ## Architecture
 
 ```text
-TelemetrySource (Demo or native Windows LMU)
+TelemetrySource (Demo or direct Windows/Proton LMU)
     ↓ TelemetryFrame (SI units; optional signals)
 independent effect generators
     ↓ continuous effects + transient envelopes
@@ -123,7 +123,7 @@ crates/race2love-core/src/
   devices.rs                      # device trait and bounded in-memory mock
   runtime.rs                      # telemetry/effects/output tasks and controls
 crates/race2love-lovense/src/       # typed protocol and local connection worker
-crates/race2love-lmu/src/           # shared safe decoder, freshness, Windows mappings
+crates/race2love-lmu/src/           # shared decoder/freshness, Windows mappings, Linux /proc
 crates/race2love-gui/src/lib.rs     # native eframe/egui views
 docs/                             # adapter plans and validation record
 ```
@@ -227,17 +227,21 @@ non-realtime/player exit clears output. The current SDK update gates are checked
 in order. See [LMU.md](docs/LMU.md) for the verified installed layout, sources and
 remaining live Windows acceptance.
 
-On **Linux/Proton**, the same parser will be used after a platform adapter finds
-the relevant LMU/Wine process and shared-memory-backed descriptor dynamically.
-The [lmu-rpm-leds project](https://github.com/fpauker/lmu-rpm-leds#how-it-works)
-documents accessing Wine memfd mappings through `/proc/<pid>/fd/<n>` without a
-bridge, root access, or SimHub. This is a research reference, not a dependency;
-no source code was copied. Its GPL-3.0-or-later license must be respected.
+On **Linux/Proton**, enable Plugins and restart LMU, then select **Le Mans
+Ultimate** or run `race2love --lmu`. Race2Love finds the same user's game and
+associated `PluginsAdapter.exe` dynamically, validates Wine's shared-memory
+backing files through `/proc/<pid>/fd/<n>`, and reuses the Windows decoder. No
+Steam library path, Proton version, root privileges or bridge is required.
+Reads are read-only and bounded; changed processes/descriptors, truncation and
+frozen clocks stop output and trigger rediscovery.
 
-The adapter must discover processes/descriptors without assuming a Steam library
-path or Proton version. `/proc` mount restrictions, different users, sandboxing,
-and Wine implementation changes can prevent access. Opening a descriptor does
-not prove it is the correct layout; size/version/consistency checks are required.
+Linux uses two matching reads of the fields it consumes, rather than the Windows
+SDK lock: `/proc` does not expose Wine's named synchronization objects. This
+reduces torn reads but cannot guarantee a fully atomic producer transaction.
+`/proc` restrictions, different users, sandbox boundaries, or Wine builds that do
+not expose a supported backing descriptor can prevent access. These conditions
+appear on Dashboard and leave output stopped. See [LMU.md](docs/LMU.md) for exact
+heuristics, synchronization limits, reference licenses and test status.
 Wheel slip, kerb, and collision effects will stay optional until their LMU values,
 units, availability, and false-positive behavior are verified. Details are in
 [adapter plans](docs/ADAPTERS.md).
@@ -279,22 +283,25 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-All **48 Linux tests** pass: 26 core, three GUI, six LMU, one reconnect backoff,
+All **57 Linux tests** pass: 26 core, three GUI, 15 LMU (including nine Linux
+acquisition tests), one reconnect backoff,
 and 12 fake Remote tests. Three additional Windows-only mapping/process fixtures
 compile here and are configured to run in Windows CI. Tests cover effect logic,
 configuration, pipeline safety, GUI controls, typed discovery, targeted request
 bodies, bounded responses/timeouts, finite expiry, renewal/deduplication,
 selection changes, manual-test limits, cancellation, reconnect, toy loss,
-persistent Stop failures, and shutdown. No real LMU or toy is required.
+persistent Stop failures, and shutdown. Linux tests cover process/prefix discovery,
+PID/fd reuse, memfd reads, truncation, inconsistent snapshots and recovery. No real
+LMU or toy is required.
 
 `Cargo.lock` is included. See [validation results](docs/VALIDATION.md) for native
 Linux and platform compile checks. GitHub CI checks Linux and native Windows/MSVC
 on push and pull requests; the new workflow has not run in this local session.
 
-**Exact Phase 4 next step:** implement dynamic LMU/Wine process and memfd discovery
-under Proton, reusing `SnapshotReader`, the Phase 3 decoder and freshness rules.
-Verify against the installed SDK and a live session; handle mapping/process restart
-without a fixed Steam path, Proton version, root access or external bridge.
+**Next step (Phase 5 acceptance):** the live Proton LMU → RPM/gear effects →
+mixer → Lovense path now works, confirmed by the owner. Check physical Stop during
+pause/game exit, reconnect and shutdown, then tune defaults/latency before adding
+Phase 6 signals. The RPM/shift generators, global scaling and mixer are implemented.
 
 Known limits: native Windows LMU/MSVC execution and native Wayland runtime checks
 remain; broader Lovense hardware/fault acceptance is unrecorded; no slip,

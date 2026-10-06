@@ -3,7 +3,8 @@
 `race2love-core` owns normalized telemetry, preferences, independent generators,
 mixing, output safety, and worker orchestration. `race2love-gui` owns native views.
 `race2love-lovense` owns local HTTP protocol, discovery, selection, and reconnect.
-`race2love-lmu` owns the safe native byte decoder and Windows SDK mapping access.
+`race2love-lmu` owns the safe native byte decoder, Windows SDK mapping access and
+read-only Linux/Proton acquisition through `/proc`.
 `src/main.rs` owns logging, config loading, the two-thread Tokio executor, and the
 awaited shutdown after the desktop event loop returns.
 
@@ -120,12 +121,14 @@ failure uses at most five retries at 1/2/4/8/16 seconds. Toy selection is transi
 
 Phase 2 implements `race2love-lovense`; see [protocol and safety details](LOVENSE.md).
 Phase 3 implements `race2love-lmu`. `SnapshotReader` isolates acquisition;
-`LmuSource<R>` handles parsing/freshness once for Windows and future Proton readers.
+`LmuSource<R>` handles parsing/freshness once for Windows and Proton readers.
 Only the Windows module permits unsafe code, with documented invariants. Core/GUI
 forbid unsafe code. See [LMU.md](LMU.md) for packing, offsets, locking, version limits
-and live acceptance work. Phase 4 adds Proton acquisition.
+and live acceptance work. Phase 4 implements read-only Proton acquisition through
+`/proc`, with process/fd identity checks and repeated field reads; the Linux module
+uses only safe standard-library I/O.
 
 Phase 6 adds generators for verified slip/road/impact signals and bounded rolling
 graphs. It does not introduce those algorithms into the telemetry adapter or
-Lovense backend. Linux LMU selection reports a clear Phase 4 availability error;
-the GUI disables that choice there while keeping Demo usable.
+Lovense backend. LMU is selectable on Windows and Linux; other platforms retain
+Demo and report native acquisition as unavailable.

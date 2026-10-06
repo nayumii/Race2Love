@@ -1,3 +1,75 @@
+# Phase 4 validation record
+
+Recorded 2026-10-06 on Linux x86-64, Rust/Cargo stable 1.94.1. Automated pipeline checks
+use `MockDevice`; fake Remote tests use loopback only. The telemetry-only probe
+has no device/network backend. The owner also confirmed the live LMU → Lovense
+output worked after explicitly resuming; earlier Phase 2 hardware testing remains
+recorded below.
+
+| Check | Result |
+| --- | --- |
+| `cargo fmt --all` and `cargo fmt --all --check` | Passed |
+| Linux workspace/all-targets `cargo check` | Passed |
+| Linux workspace/all-targets Clippy with `-D warnings` | Passed |
+| `cargo test --workspace --locked --offline` | 57 passed, 0 failed |
+| Native Linux build and five-second display-free Demo | Passed; final mock output 0.0 |
+| Windows GNU workspace/all-targets check and Clippy | Passed; Windows fixtures compiled, not executed |
+| Native Linux/X11 window with synthetic Wine memfd producer | Passed; discovered real `/proc` fd and displayed normalized values |
+| Real LMU 1.4.2 under Proton | Live dashboard and 30-second probe passed; about 60 fresh frames/s |
+| Live LMU → Lovense output | Owner confirmed it worked after Resume output |
+
+All 48 prior Linux tests remain; nine new Linux adapter tests cover exact process
+matching and stat parsing, prefix/parent association, foreign adapters, candidate
+layout/size rejection, PID reuse, fd replacement, adapter/game loss, truncation,
+consistency skips, actual memfd reads through `/proc`, selecting advancing clocks
+with constant RPM, and full-pipeline freeze/player exit/process loss/reconnect and
+shutdown. GUI coverage now exercises Linux LMU selection and its Stop latch.
+The additional Windows-only tests remain compiled for native CI (51 on Windows).
+The only added direct dependency is Linux test-only `rustix` 1.1.5; acquisition
+uses safe standard-library file I/O and the existing decoder.
+
+The native synthetic test used a disposable process with LMU's executable
+argument and a 327680-byte `wine-mapping` memfd containing independently generated
+fixture values. Race2Love discovered the `/proc` descriptor, displayed Spa / fixture
+GT3, 13 m/s, 7000/8000 RPM, gear 4, throttle 75% and brake 12.5%, and generated only
+mock output. Frozen telemetry and discovery ambiguity cleared output. The fixture
+was stopped before the real-game check; it does not constitute live LMU validation.
+
+The real game then exposed a 327680-byte `wine-mapping` descriptor in the game and
+its associated plugin adapter. Race2Love discovered the game's descriptor without
+any configured path/PID/Proton version. With no live player car, Dashboard reported
+that state, retained its connection and kept output at zero. After the owner
+entered the car, the real session supplied game marker **14200**, Practice at
+Autodromo Enzo e Dino Ferrari, and Manthey DK Engineering 2026 #91:LM. Dashboard
+displayed live speed/RPM/max RPM/gear/throttle/brake; the owner confirmed this
+information was correct. The read-only 30-second probe observed approximately
+60 fresh frames per second while braking, accelerating and shifting, with max RPM
+9400. The probe disconnected normally. Frozen game clocks were also observed
+clearing output and causing rediscovery. No game inputs were automated.
+
+The desktop window started on mock output. The owner subsequently connected and
+selected their Lovense device through the UI, then reported no vibration. At that
+point both connections and telemetry were live, while the UI showed **Emergency
+stop latched** and zero mixed/target/applied output. The owner was directed to the
+existing **Resume output** button; an explanatory Stop/Resume hint was added.
+Race2Love never automatically clears this latch after device/source changes.
+After Resume, Dashboard showed **Running**, mixed output 40%, scaled target 20%
+and applied Lovense output 15% in one observation, alongside live player data.
+The owner then confirmed physical output worked and identified the missed Resume
+action as the cause. This is a live end-to-end success report; toy/Remote/Proton
+versions and a complete physical fault/latency acceptance run were not recorded.
+
+Linux's repeated read-only snapshots reduce inconsistency but cannot provide the
+Windows SDK lock's transaction guarantee. Exact bounds, heuristics, protocol
+references and `/proc` limitations are in [LMU.md](LMU.md). Full game/toy fault
+acceptance (live game exit/restart, disconnect/reconnect and physical Stop confirmation),
+native Windows/MSVC execution, Wayland and latency/CPU benchmarking
+remain separate checks. No proprietary SDK headers or real telemetry dump are
+redistributed.
+
+Use the reproduction commands and Windows Clang environment below. All checks used
+the lockfile/offline cache; CI has not run in this local session.
+
 # Phase 3 validation record
 
 Recorded 2026-10-06 on Linux x86-64, Rust/Cargo stable 1.94.1. Automated device
