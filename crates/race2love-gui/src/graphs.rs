@@ -68,10 +68,8 @@ impl History {
             values: values.map(|v| v.filter(|n| n.is_finite())),
         });
     }
-    pub fn show(&self, ui: &mut egui::Ui, now: Instant) {
-        ui.small(
-            "Last 20 seconds · 20 samples/s · hover for values · gaps mean unavailable telemetry",
-        );
+    pub fn show(&self, ui: &mut egui::Ui, now: Instant, debug: bool) {
+        ui.small("Last 20 seconds · hover for values");
         for (index, (label, unit)) in [
             ("Engine RPM", "RPM"),
             ("Tyre sliding contact", "fraction"),
@@ -82,6 +80,9 @@ impl History {
         .into_iter()
         .enumerate()
         {
+            if !debug && index != 4 {
+                continue;
+            }
             ui.label(label);
             let (rect, response) = ui
                 .allocate_exact_size(egui::vec2(ui.available_width(), 95.0), egui::Sense::hover());

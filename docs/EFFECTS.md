@@ -50,9 +50,11 @@ threshold. Adjust suspension gain separately if grass overwhelms the cue. These
 are starting defaults, not hardware-calibrated values. Keep enough global/device
 headroom to feel an additional cue over the engine background.
 
-Dashboard debug shows rumble flags, material names and filtered road vibration.
-Optional graphs show RPM, sliding fraction, suspension speed, raw vertical
-acceleration and mixed output. History is at most 20 seconds / 400 samples and
+Enable **Devices / Settings → Debug mode** for speed, RPM, gear, pedal inputs,
+session/car details, shift detection, rumble flags and raw signals. Normal
+Dashboard shows mixer output, device output, effect activity and output limits.
+**Show output history** plots mixer output; Debug mode adds RPM, sliding fraction,
+suspension speed and vertical acceleration graphs. History is at most 20 seconds / 400 samples and
 clears when disabled or switching source; unavailable telemetry creates gaps.
 
 ## Shift and impact envelopes

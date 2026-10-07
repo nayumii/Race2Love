@@ -17,8 +17,11 @@ impact effects, bounded live graphs and named effect profiles are now available.
 See [effect signals and tuning](docs/EFFECTS.md). See [validation status](docs/VALIDATION.md)
 for automated checks, live telemetry reports and remaining acceptance.
 
-The native UI now has a dark cockpit theme, larger telemetry readouts, grouped
-controls, an RPM response preview, and responsive sidebar/tab navigation.
+The native UI has a dark cockpit theme centered on mixer output, device output,
+effect activity and intensity controls, with responsive sidebar/tab navigation.
+Enable **Devices / Settings → Debug mode** for live driving telemetry, raw-signal
+graphs and technical runtime settings. Connection options hold advanced transport
+and experimental output controls.
 Emergency Stop and Resume remain above the scrolling pages. The default window
 is 1200 × 860; compact layouts work down to 620 × 540.
 
@@ -182,7 +185,8 @@ and CPU/latency still require measurement.
 Demo simulates a 24-second driving cycle with RPM ramps, up/downshifts, braking,
 slip, kerbs, and occasional explicit impacts. Enable the additional effects in
 Effects to try them; they default off. Dashboard offers optional 20-second live
-graphs, effect meters and a shift counter. Demo and LMU use the same effect engine.
+output history and effect meters. Debug mode adds telemetry graphs and a shift
+counter. Demo and LMU use the same effect engine.
 
 ## Configuration and logging
 

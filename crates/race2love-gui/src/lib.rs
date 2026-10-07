@@ -91,7 +91,7 @@ impl Race2LoveApp {
 
     fn navigation(&mut self, ui: &mut egui::Ui, vertical: bool) {
         for (page, title, subtitle) in [
-            (Page::Dashboard, "Dashboard", "Live telemetry & output"),
+            (Page::Dashboard, "Dashboard", "Feedback & output"),
             (Page::Effects, "Effects", "Shape your feedback"),
             (Page::Settings, "Devices / Settings", "Connect & configure"),
         ] {
@@ -147,7 +147,14 @@ impl Race2LoveApp {
                 if testing {
                     "Testing vibration"
                 } else {
-                    snapshot.effects.reason.label()
+                    match snapshot.effects.reason {
+                        StopReason::Running => "Running",
+                        StopReason::EmergencyStop => "Output stopped",
+                        StopReason::SourceDisabled => "Game input paused",
+                        StopReason::NoTelemetry => "Waiting for game",
+                        StopReason::StaleTelemetry => "Game data lost · output stopped",
+                        StopReason::Shutdown => "Shutting down",
+                    }
                 },
             );
         });
@@ -164,8 +171,8 @@ impl Race2LoveApp {
     fn dashboard(&mut self, ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
         theme::page_title(
             ui,
-            "Feel every lap.",
-            "Your session, telemetry and haptic feedback in one place.",
+            "Your feedback",
+            "Control the strength of your feedback and see what reaches your device.",
         );
         let fresh = snapshot.telemetry.connected
             && telemetry_is_fresh(
@@ -176,7 +183,7 @@ impl Race2LoveApp {
         theme::card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal_wrapped(|ui| {
-                ui.label("Telemetry source:");
+                ui.label("Game:");
                 if ui
                     .selectable_label(snapshot.telemetry.source_name == "Demo", "Demo")
                     .clicked()
@@ -197,7 +204,7 @@ impl Race2LoveApp {
                     self.control.select_source(race2love_lmu::native_source);
                 }
                 let mut enabled = snapshot.controls.source_enabled;
-                if ui.checkbox(&mut enabled, "Run telemetry").changed() {
+                if ui.checkbox(&mut enabled, "Enable game input").changed() {
                     self.control.set_source_enabled(enabled);
                 }
             });
@@ -210,11 +217,22 @@ impl Race2LoveApp {
             ui.horizontal_wrapped(|ui| {
                 indicator(
                     ui,
-                    snapshot.telemetry.connected,
-                    &format!("{} connection", snapshot.telemetry.source_name),
+                    fresh,
+                    if fresh {
+                        "Game ready"
+                    } else {
+                        "Waiting for game"
+                    },
                 );
-                indicator(ui, fresh, "Fresh player telemetry");
-                indicator(ui, snapshot.device.connected, &snapshot.device.name);
+                indicator(
+                    ui,
+                    snapshot.device.connected,
+                    snapshot
+                        .device
+                        .name
+                        .strip_suffix(" (mock device)")
+                        .unwrap_or(&snapshot.device.name),
+                );
             });
             if let Some(error) = &snapshot.telemetry.error {
                 ui.colored_label(egui::Color32::LIGHT_RED, error);
@@ -224,56 +242,14 @@ impl Race2LoveApp {
             }
         });
         ui.add_space(6.0);
-        let frame = snapshot.telemetry.frame.as_ref().filter(|_| fresh);
-        ui.columns(3, |cols| {
-            theme::metric(
-                &mut cols[0],
-                "SPEED",
-                &frame.map_or("—".into(), |f| format!("{:.0}", f.speed_mps * 3.6)),
-                "km/h",
-                theme::TEXT,
-            );
-            theme::metric(
-                &mut cols[1],
-                "ENGINE",
-                &frame.map_or("—".into(), |f| format!("{:.0}", f.engine_rpm)),
-                "RPM",
-                theme::ACCENT,
-            );
-            let gear = frame.map_or("—".into(), |f| match f.gear {
-                -1 => "R".into(),
-                0 => "N".into(),
-                n => n.to_string(),
-            });
-            theme::metric(&mut cols[2], "GEAR", &gear, "Current gear", theme::VIOLET);
-        });
-        ui.add_space(6.0);
-        if ui.available_width() >= 720.0 {
-            ui.columns(2, |cols| {
-                Self::driving_card(&mut cols[0], frame);
-                Self::output_card(&mut cols[1], snapshot);
-            });
-        } else {
-            Self::driving_card(ui, frame);
-            Self::output_card(ui, snapshot);
-        }
+        Self::output_card(ui, snapshot, self.config.ui.show_debug);
         let levels = snapshot.effects.levels;
-        ui.horizontal(|ui| {
-            indicator(
-                ui,
-                levels
-                    .last_shift
-                    .is_some_and(|at| at.elapsed() < Duration::from_millis(500)),
-                "Shift detected",
-            );
-            ui.label(format!("{} shifts since effects reset", levels.shift_count));
-        });
         theme::card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             theme::section(
                 ui,
                 "Effect activity",
-                "Live contributions before global intensity",
+                "Which effects are contributing to your feedback",
             );
             let signals = [
                 ("Engine", levels.engine),
@@ -299,9 +275,11 @@ impl Race2LoveApp {
             .as_ref()
             .is_some_and(|(physical, _)| physical.name() == snapshot.device.name)
         {
-            ui.small("Lovense output controls the selected toy. Commands expire without renewal.");
+            ui.small("Feedback is routed to your selected device.");
         } else {
-            ui.small("Mock output is an in-memory value. Connect Lovense in Devices / Settings for physical output.");
+            ui.small(
+                "Demo output is active. Connect a device in Devices / Settings to feel feedback.",
+            );
         }
         theme::card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -324,6 +302,48 @@ impl Race2LoveApp {
             );
         });
         if self.config.ui.show_debug {
+            ui.separator();
+            theme::section(
+                ui,
+                "Debug diagnostics",
+                "Live game data and detection details",
+            );
+            let frame = snapshot.telemetry.frame.as_ref().filter(|_| fresh);
+            ui.columns(3, |cols| {
+                theme::metric(
+                    &mut cols[0],
+                    "SPEED",
+                    &frame.map_or("—".into(), |f| format!("{:.0}", f.speed_mps * 3.6)),
+                    "km/h",
+                    theme::TEXT,
+                );
+                theme::metric(
+                    &mut cols[1],
+                    "ENGINE",
+                    &frame.map_or("—".into(), |f| format!("{:.0}", f.engine_rpm)),
+                    "RPM",
+                    theme::ACCENT,
+                );
+                let gear = frame.map_or("—".into(), |f| match f.gear {
+                    -1 => "R".into(),
+                    0 => "N".into(),
+                    n => n.to_string(),
+                });
+                theme::metric(&mut cols[2], "GEAR", &gear, "Current gear", theme::VIOLET);
+            });
+            ui.add_space(6.0);
+            Self::driving_card(ui, frame);
+            let levels = snapshot.effects.levels;
+            ui.horizontal(|ui| {
+                indicator(
+                    ui,
+                    levels
+                        .last_shift
+                        .is_some_and(|at| at.elapsed() < Duration::from_millis(500)),
+                    "Shift detected",
+                );
+                ui.label(format!("{} shifts since effects reset", levels.shift_count));
+            });
             ui.separator();
             ui.label("Normalized signals · optional values remain unavailable unless verified");
             if let Some(frame) = &snapshot.telemetry.frame {
@@ -352,9 +372,10 @@ impl Race2LoveApp {
                 ));
             }
         }
-        ui.checkbox(&mut self.config.ui.show_graphs, "Show live graphs");
+        ui.checkbox(&mut self.config.ui.show_graphs, "Show output history");
         if self.config.ui.show_graphs {
-            self.history.show(ui, std::time::Instant::now());
+            self.history
+                .show(ui, std::time::Instant::now(), self.config.ui.show_debug);
         }
     }
 
@@ -401,24 +422,29 @@ impl Race2LoveApp {
         });
     }
 
-    fn output_card(ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
+    fn output_card(ui: &mut egui::Ui, snapshot: &RuntimeSnapshot, debug: bool) {
         theme::card().show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            theme::section(ui, "Haptic output", &snapshot.device.name);
+            theme::section(
+                ui,
+                "Mixer output",
+                "Combined strength of your active effects",
+            );
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(format!("{:.0}%", unit(snapshot.device.intensity) * 100.0))
+                    egui::RichText::new(format!("{:.0}%", unit(snapshot.effects.mixed) * 100.0))
                         .size(42.0)
                         .color(theme::VIOLET)
                         .strong(),
                 );
-                ui.label(egui::RichText::new("Device target").color(theme::MUTED));
+                ui.label(egui::RichText::new("Before global intensity").color(theme::MUTED));
             });
-            meter(ui, "Mixed effects", snapshot.effects.mixed);
-            meter(ui, "Scaled target", snapshot.effects.intensity);
+            if debug {
+                meter(ui, "Scaled target", snapshot.effects.intensity);
+            }
             theme::bar(
                 ui,
-                "Acknowledged device target",
+                "Device output",
                 snapshot.device.intensity,
                 theme::VIOLET,
             );
@@ -486,12 +512,12 @@ impl Race2LoveApp {
                 shift.attack_ms + shift.hold_ms + shift.release_ms
             ));
         });
-        ui.small("Adjacent forward shifts count, including a brief neutral transition (up to 250 ms). Long neutral, reverse and reconnects reset detection.");
-        ui.small(format!(
+        if self.config.ui.show_debug { ui.small("Adjacent forward shifts count, including a brief neutral transition (up to 250 ms). Long neutral, reverse and reconnects reset detection."); }
+        if self.config.ui.show_debug { ui.small(format!(
             "Output updates at {} Hz. Pulses shorter than {:.0} ms may be missed.",
             self.config.output.update_hz,
             1000.0 / f64::from(self.config.output.update_hz)
-        ));
+        )); }
         });
         effect_card(ui, "Wheel slip", |ui| {
             let slip = &mut self.config.effects.wheel_slip;
@@ -509,7 +535,9 @@ impl Race2LoveApp {
                 "Slip maximum intensity",
                 0.0..=1.0,
             );
-            ui.small("LMU: maximum loaded-wheel sliding contact fraction (not longitudinal slip ratio). Active above 3 m/s.");
+            if self.config.ui.show_debug {
+                ui.small("LMU: maximum loaded-wheel sliding contact fraction (not longitudinal slip ratio). Active above 3 m/s.");
+            }
         });
         effect_card(ui, "Kerbs / road", |ui| {
             let road = &mut self.config.effects.road;
@@ -539,7 +567,7 @@ impl Race2LoveApp {
                 egui::Slider::new(&mut road.acceleration_gain, 0.0..=2.0)
                     .text("Vertical vibration gain"),
             );
-            ui.small("Road feedback uses suspension movement and vertical vibration, even when LMU leaves rumble-strip flags false. Explicit loaded-tyre kerb contact also supplies kerb intensity. All are capped by Road maximum and active above 3 m/s. Bumps/grass can also trigger this effect.");
+            ui.small("Lower thresholds for more sensitive road feedback. Bumps and grass can also trigger this effect.");
         });
         effect_card(ui, "Collision / impact", |ui| {
             let impact = &mut self.config.effects.impact;
@@ -556,10 +584,14 @@ impl Race2LoveApp {
                 "Impact pulse intensity",
                 0.0..=1.0,
             );
-            ui.small("LMU: a new explicit impact event, with acceleration / 100 m/s² as estimated severity. One pulse per event; braking alone cannot trigger it.");
+            if self.config.ui.show_debug {
+                ui.small("LMU: a new explicit impact event, with acceleration / 100 m/s² as estimated severity. One pulse per event; braking alone cannot trigger it.");
+            }
         });
         effect_card(ui, "Effect profiles", |ui| {
-            ui.small("Profiles contain effects only. Device settings and global safety limits stay as configured.");
+            ui.small(
+                "Save and reuse your effect settings. Profiles keep your output limits unchanged.",
+            );
             egui::ComboBox::from_id_salt("effect_profile")
                 .selected_text(&self.profile_name)
                 .show_ui(ui, |ui| {
@@ -609,7 +641,7 @@ impl Race2LoveApp {
             "Maximum output",
             0.0..=1.0,
         );
-        ui.small("Valid changes apply immediately. Stop remains latched until Resume output.");
+        ui.small("Changes apply immediately.");
     }
 
     fn settings(&mut self, ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
@@ -622,24 +654,6 @@ impl Race2LoveApp {
         ui.set_min_width(ui.available_width());
         theme::section(ui, "Lovense Remote / Game Mode", "Local control. Your chosen device.");
         ui.label("Enable LAN in Remote, then enter its address and port. Connect discovers toys.");
-        ui.horizontal(|ui| {
-            ui.label("Protocol");
-            ui.selectable_value(
-                &mut self.config.lovense.protocol,
-                LocalProtocol::Http,
-                "HTTP",
-            );
-            ui.selectable_value(
-                &mut self.config.lovense.protocol,
-                LocalProtocol::Https,
-                "HTTPS",
-            );
-            if ui.button("Local HTTP preset").clicked() {
-                self.config.lovense.host = "127.0.0.1".into();
-                self.config.lovense.port = Some(20010);
-                self.config.lovense.protocol = LocalProtocol::Http;
-            }
-        });
         ui.horizontal(|ui| {
             ui.label("Remote host / IP");
             ui.add(egui::TextEdit::singleline(&mut self.config.lovense.host).char_limit(253));
@@ -659,6 +673,25 @@ impl Race2LoveApp {
             &mut self.config.lovense.automatic_reconnect,
             "Reconnect automatically (up to 5 attempts)",
         );
+        egui::CollapsingHeader::new("Connection options").show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Protocol");
+            ui.selectable_value(
+                &mut self.config.lovense.protocol,
+                LocalProtocol::Http,
+                "HTTP",
+            );
+            ui.selectable_value(
+                &mut self.config.lovense.protocol,
+                LocalProtocol::Https,
+                "HTTPS",
+            );
+            if ui.button("Local HTTP preset").clicked() {
+                self.config.lovense.host = "127.0.0.1".into();
+                self.config.lovense.port = Some(20010);
+                self.config.lovense.protocol = LocalProtocol::Http;
+            }
+        });
         ui.add(
             egui::Slider::new(&mut self.config.lovense.request_timeout_ms, 100..=5_000)
                 .text("API timeout (ms)"),
@@ -672,6 +705,7 @@ impl Race2LoveApp {
             });
         ui.small("Compare modes with the same effects/intensity. Connect, reselect the toy and Resume to apply.");
         ui.small("Direct Vibrate is the tested default. Pattern modes are experimental; switch back if they cycle or feel irregular.");
+        });
         if let (Some(lovense), Some((device, demo))) = (&self.lovense, &self.devices) {
             let remote = lovense.snapshot();
             if remote.using_vibrate_fallback {
@@ -707,15 +741,15 @@ impl Race2LoveApp {
                 remote.state == ConnectionState::Connected,
                 remote.state.label(),
             );
-            if let Some(endpoint) = &remote.endpoint {
+            if self.config.ui.show_debug && let Some(endpoint) = &remote.endpoint {
                 ui.small(format!("Active endpoint: {endpoint}"));
             }
-            ui.small("Connect and toy changes stop output. Pause Demo, Resume output, then Test. Test leaves Demo paused.");
-            ui.small("Test strength: 40% × global intensity, capped by maximum. Resume with Demo running enables racing effects.");
+            ui.small("After selecting a device, Resume output to enable feedback or test vibration.");
+            ui.small("Testing pauses the game feed and respects your output limits.");
             if let Some(error) = &remote.error {
                 ui.colored_label(egui::Color32::LIGHT_RED, error);
             }
-            ui.label("Detected toys (select one explicitly):");
+            ui.label("Select a device:");
             for toy in &remote.toys {
                 ui.horizontal_wrapped(|ui| {
                     let allowed = toy.connected && toy.vibration != Some(false);
@@ -755,9 +789,9 @@ impl Race2LoveApp {
                 ui.small("No toys detected. Pair a toy in Remote and click Connect.");
             }
         } else {
-            ui.label("Lovense connection worker is unavailable in this view.");
+            ui.label("Device connection is unavailable.");
         }
-        ui.small("HTTPS requires a valid certificate hostname. Address changes apply on Connect; no cloud or LAN scanning.");
+
         });
         theme::card().show(ui, |ui| {
         ui.set_min_width(ui.available_width());
@@ -768,8 +802,9 @@ impl Race2LoveApp {
         );
         ui.checkbox(
             &mut self.config.ui.show_debug,
-            "Show telemetry debug values on Dashboard",
+            "Debug mode",
         );
+        if self.config.ui.show_debug {
         ui.add(egui::Slider::new(&mut self.config.ui.refresh_hz, 1..=60).text("UI refresh (Hz)"));
         ui.add(
             egui::Slider::new(&mut self.config.output.telemetry_hz, 1..=120)
@@ -787,16 +822,16 @@ impl Race2LoveApp {
                 .text("Telemetry timeout (ms)"),
         );
         ui.small("Defaults: telemetry/effects 60 Hz, output 25 Hz, UI 30 Hz. Higher rates consume more CPU.");
-        ui.small("Minimize-to-tray and automatic launch are not implemented.");
         ui.separator();
         ui.label("TOML configuration");
         if let Some(path) = &self.config_path {
             ui.monospace(path.display().to_string());
         }
+        }
         if ui.button("Save settings").clicked() {
             self.save_settings();
         }
-        ui.small("Changed settings are also saved on normal exit. Runtime state is never saved.");
+        ui.small("Changes are also saved when you close the app.");
         });
     }
 }
@@ -1142,8 +1177,9 @@ mod tests {
         wait_for(|| device.intensity() == 0.0).await;
         ui.click(&mut app, "Devices / Settings");
         assert!(app.page == Page::Settings);
-        ui.click(&mut app, "Show telemetry debug values on Dashboard");
+        ui.click(&mut app, "Debug mode");
         assert!(app.config.ui.show_debug);
+        ui.click(&mut app, "Connection options");
         ui.click(&mut app, "Direct Vibrate (previous)");
         ui.click(&mut app, "Pattern smoothing + dithering (experimental)");
         ui.click(&mut app, "Pattern smoothing + dithering (experimental)");
@@ -1156,7 +1192,7 @@ mod tests {
         assert_eq!(Config::load(&path).unwrap(), app.config);
         assert!(!app.dirty);
         ui.click(&mut app, "Dashboard");
-        ui.click(&mut app, "Run telemetry");
+        ui.click(&mut app, "Enable game input");
         wait_for(|| !runtime.control.snapshot().telemetry.connected).await;
         assert_eq!(device.intensity(), 0.0);
         ui.render(
@@ -1218,6 +1254,7 @@ mod tests {
         let device = Arc::new(MockDevice::default());
         let mut config = Config::default();
         config.output.telemetry_timeout_ms = 2_000;
+        config.ui.show_graphs = true;
         let runtime = RaceRuntime::spawn(
             Box::new(MockTelemetrySource::with_frame(TelemetryFrame {
                 speed_mps: 50.0,
@@ -1237,6 +1274,55 @@ mod tests {
         let mut app = Race2LoveApp::new(runtime.control.clone(), config, None, None);
         let mut ui = TestUi::new();
         wait_for(|| runtime.control.snapshot().telemetry.frame.is_some()).await;
+        ui.size = egui::vec2(880.0, 3000.0);
+        let normal = ui.render(&mut app, vec![]);
+        let text = |output: &egui::FullOutput| {
+            output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::epaint::Shape::Text(text) = &shape.shape {
+                        Some(text.galley.job.text.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let labels = text(&normal);
+        assert!(labels.iter().any(|label| label == "Mixer output"));
+        for hidden in [
+            "SPEED",
+            "GEAR",
+            "Fixture GT3",
+            "Race · Spa",
+            "Engine RPM",
+            "Shift detected",
+            "Body vertical acceleration",
+        ] {
+            assert!(
+                !labels.iter().any(|label| label == hidden),
+                "diagnostic visible without debug: {hidden}"
+            );
+        }
+        app.page = Page::Settings;
+        let labels = text(&ui.render(&mut app, vec![]));
+        for hidden in [
+            "UI refresh (Hz)",
+            "Telemetry refresh (Hz)",
+            "API timeout (ms)",
+            "TOML configuration",
+        ] {
+            assert!(
+                !labels.iter().any(|label| label == hidden),
+                "advanced control visible by default: {hidden}"
+            );
+        }
+        ui.click(&mut app, "Debug mode");
+        assert!(app.config.ui.show_debug);
+        let labels = text(&ui.render(&mut app, vec![]));
+        assert!(labels.iter().any(|label| label == "Telemetry refresh (Hz)"));
+        ui.click(&mut app, "Dashboard");
         let output = ui.render(&mut app, vec![]);
         let labels: Vec<_> = output
             .shapes

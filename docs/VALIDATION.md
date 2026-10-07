@@ -1,3 +1,17 @@
+# Feedback-focused UI follow-up
+
+Recorded 2026-10-07. Normal Dashboard now emphasizes mixer/device output,
+effect activity and output limits. Driving telemetry, raw-signal graphs,
+shift counts, intermediate targets and technical runtime controls are debug-only.
+Connection transport and experimental output settings are explicitly expandable.
+
+All five GUI tests pass on Linux and Windows GNU under isolated Wine. The
+visibility regression checks normal mode with graphs enabled, enables Debug
+mode through Settings, and checks that telemetry and technical controls return.
+Existing safety, connection and persistence tests pass. Formatting, workspace
+check, and strict all-target Clippy pass for Linux and Windows GNU. This change
+preserves configuration values and the existing telemetry/device pipeline.
+
 # Phase 7 UI validation
 
 Recorded 2026-10-06, Rust/Cargo 1.94.1. Formatting, workspace/all-target checks
