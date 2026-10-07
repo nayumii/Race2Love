@@ -1,3 +1,23 @@
+# Phase 7 UI validation
+
+Recorded 2026-10-06, Rust/Cargo 1.94.1. Formatting, workspace/all-target checks
+and strict Clippy pass for Linux and Windows GNU. All **86 Linux tests** and
+**81 Windows tests under isolated Wine** pass (five GUI tests on each platform).
+The existing controls test still exercises Stop/Resume, effect toggles, save/load,
+source selection and device connections. A new regression scrolls every page at
+620 × 540 and 1200 × 860, checks the Stop button's visible bounds, and exercises
+Stop/Resume against the real runtime with mock output.
+
+The native X11 Demo window was visually inspected at wide and compact sizes:
+typography, contrast, telemetry cards, effect controls, and the fixed safety bar.
+The GUI remains egui/glow with no new dependencies, remote fonts or image assets.
+The RPM preview calls the existing core mapping function. Runtime timing,
+configuration format, telemetry and device behavior are unchanged. Native Windows
+visual/DPI review and Wayland visual review remain separate acceptance work.
+
+Phase 8 is release readiness, as requested; release automation is not part of
+this UI phase. Historical checks below apply to their corresponding revisions.
+
 # Phase 6 and kerb fallback validation
 
 Recorded 2026-10-06, Rust/Cargo 1.94.1. Formatting, workspace/all-target checks

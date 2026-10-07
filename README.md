@@ -6,7 +6,7 @@ Ultimate → Lovense Remote/Game Mode**, on Linux with Steam/Proton and Windows
 10/11. The design uses no SimHub, Electron, browser frontend, or mandatory cloud
 service.
 
-**Phase 6 implementation:** the application starts with **Demo telemetry** and an
+**Phase 7 implementation:** the application starts with **Demo telemetry** and an
 **in-memory mock device**. The local Lovense backend is available through an
 explicit Connect and toy selection. **Direct Windows and Proton LMU** is selectable on
 Dashboard or with `--lmu`. The owner reports
@@ -16,6 +16,14 @@ scaling share one pipeline across both platforms. Optional wheel-slip, road and
 impact effects, bounded live graphs and named effect profiles are now available.
 See [effect signals and tuning](docs/EFFECTS.md). See [validation status](docs/VALIDATION.md)
 for automated checks, live telemetry reports and remaining acceptance.
+
+The native UI now has a dark cockpit theme, larger telemetry readouts, grouped
+controls, an RPM response preview, and responsive sidebar/tab navigation.
+Emergency Stop and Resume remain above the scrolling pages. The default window
+is 1200 × 860; compact layouts work down to 620 × 540.
+
+**Next: Phase 8 — release readiness**, including packaging, automated release
+builds and installation documentation. See [the roadmap](docs/ROADMAP.md).
 
 ## Try Demo
 

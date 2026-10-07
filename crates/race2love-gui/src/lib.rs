@@ -14,6 +14,7 @@ use race2love_core::{
 };
 use race2love_lovense::{ConnectionState, LovenseControl};
 mod graphs;
+mod theme;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -34,6 +35,7 @@ pub struct Race2LoveApp {
     devices: Option<(Arc<dyn HapticDevice>, Arc<dyn HapticDevice>)>,
     history: graphs::History,
     profile_name: String,
+    styled: bool,
 }
 
 impl Race2LoveApp {
@@ -55,6 +57,7 @@ impl Race2LoveApp {
             devices: None,
             history: graphs::History::default(),
             profile_name: "My effects".into(),
+            styled: false,
         }
     }
 
@@ -86,41 +89,62 @@ impl Race2LoveApp {
         }
     }
 
+    fn navigation(&mut self, ui: &mut egui::Ui, vertical: bool) {
+        for (page, title, subtitle) in [
+            (Page::Dashboard, "Dashboard", "Live telemetry & output"),
+            (Page::Effects, "Effects", "Shape your feedback"),
+            (Page::Settings, "Devices / Settings", "Connect & configure"),
+        ] {
+            let selected = self.page == page;
+            let button = egui::Button::selectable(selected, title)
+                .min_size(egui::vec2(if vertical { 174.0 } else { 0.0 }, 38.0));
+            if ui.add(button).clicked() {
+                self.page = page;
+            }
+            if vertical {
+                ui.label(egui::RichText::new(subtitle).size(11.0).color(theme::MUTED));
+                ui.add_space(16.0);
+            }
+        }
+    }
+
     fn header(&mut self, ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
         ui.horizontal_wrapped(|ui| {
-            ui.heading("Race2Love");
-            ui.label("Phase 6 · telemetry effects and live tuning");
-            ui.separator();
-            for (page, title) in [
-                (Page::Dashboard, "Dashboard"),
-                (Page::Effects, "Effects"),
-                (Page::Settings, "Devices / Settings"),
-            ] {
-                ui.selectable_value(&mut self.page, page, title);
-            }
-        });
-        ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
+            theme::brand(ui);
+            ui.add_space(12.0);
             if ui
                 .add(
                     egui::Button::new(
-                        egui::RichText::new("EMERGENCY STOP · Esc").color(egui::Color32::WHITE),
+                        egui::RichText::new("EMERGENCY STOP · Esc")
+                            .color(theme::RED)
+                            .strong(),
                     )
-                    .fill(egui::Color32::from_rgb(160, 35, 45)),
+                    .fill(egui::Color32::from_rgb(64, 29, 42))
+                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(112, 49, 64)))
+                    .min_size(egui::vec2(0.0, 38.0)),
                 )
                 .clicked()
             {
                 self.control.emergency_stop();
             }
-            if snapshot.controls.emergency_stopped && ui.button("Resume output").clicked() {
+            if snapshot.controls.emergency_stopped
+                && ui
+                    .add(
+                        egui::Button::new("Resume output")
+                            .fill(egui::Color32::from_rgb(35, 78, 74)),
+                    )
+                    .clicked()
+            {
                 self.control.resume();
             }
-            ui.label(
-                if snapshot
-                    .controls
-                    .test_pulse
-                    .is_some_and(|pulse| std::time::Instant::now() < pulse.until)
-                {
+            let testing = snapshot
+                .controls
+                .test_pulse
+                .is_some_and(|pulse| std::time::Instant::now() < pulse.until);
+            indicator(
+                ui,
+                snapshot.effects.reason == StopReason::Running || testing,
+                if testing {
                     "Testing vibration"
                 } else {
                     snapshot.effects.reason.label()
@@ -128,111 +152,111 @@ impl Race2LoveApp {
             );
         });
         if snapshot.controls.emergency_stopped {
-            ui.small("Output is stopped. Press Resume output when ready. Connecting a device or changing telemetry stops output.");
+            ui.label(
+                egui::RichText::new("Output paused. Resume when ready to feel the drive.")
+                    .size(12.0)
+                    .color(theme::MUTED),
+            );
         }
-        ui.separator();
+        ui.add_space(4.0);
     }
 
     fn dashboard(&mut self, ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
-        ui.heading("Telemetry & output");
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Telemetry source:");
-            if ui
-                .selectable_label(snapshot.telemetry.source_name == "Demo", "Demo")
-                .clicked()
-            {
-                self.control
-                    .select_source(|| Box::new(DemoSource::default()));
-            }
-            if ui
-                .add_enabled(
-                    cfg!(any(windows, target_os = "linux")),
-                    egui::Button::selectable(
-                        snapshot.telemetry.source_name == "Le Mans Ultimate",
-                        "Le Mans Ultimate",
-                    ),
-                )
-                .clicked()
-            {
-                self.control.select_source(race2love_lmu::native_source);
-            }
-        });
-        if !cfg!(any(windows, target_os = "linux")) {
-            ui.small(
-                "Native LMU telemetry supports Windows and Linux/Proton. Demo remains available.",
-            );
-        }
+        theme::page_title(
+            ui,
+            "Feel every lap.",
+            "Your session, telemetry and haptic feedback in one place.",
+        );
         let fresh = snapshot.telemetry.connected
             && telemetry_is_fresh(
                 snapshot.telemetry.frame.as_ref(),
                 std::time::Instant::now(),
                 Duration::from_millis(self.config.output.telemetry_timeout_ms),
             );
-        ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            indicator(
-                ui,
-                snapshot.telemetry.connected,
-                &format!("{} connection", snapshot.telemetry.source_name),
-            );
-            indicator(ui, fresh, "Fresh player telemetry");
-            indicator(ui, snapshot.device.connected, &snapshot.device.name);
-        });
-        let mut enabled = snapshot.controls.source_enabled;
-        if ui.checkbox(&mut enabled, "Run telemetry").changed() {
-            self.control.set_source_enabled(enabled);
-        }
-        if let Some(error) = &snapshot.telemetry.error {
-            ui.colored_label(egui::Color32::LIGHT_RED, error);
-        }
-        if let Some(error) = &snapshot.device.error {
-            ui.colored_label(egui::Color32::LIGHT_RED, error);
-        }
-        ui.separator();
-        if let Some(frame) = snapshot.telemetry.frame.as_ref().filter(|_| fresh) {
-            egui::Grid::new("telemetry_values")
-                .num_columns(2)
-                .spacing([24.0, 10.0])
-                .show(ui, |ui| {
-                    value_row(ui, "Session", frame.session.as_deref().unwrap_or("Unknown"));
-                    value_row(ui, "Car", frame.car.as_deref().unwrap_or("Unknown"));
-                    value_row(
-                        ui,
-                        "Speed",
-                        &format!(
-                            "{:.0} km/h  ({:.1} m/s)",
-                            frame.speed_mps * 3.6,
-                            frame.speed_mps
+        theme::card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Telemetry source:");
+                if ui
+                    .selectable_label(snapshot.telemetry.source_name == "Demo", "Demo")
+                    .clicked()
+                {
+                    self.control
+                        .select_source(|| Box::new(DemoSource::default()));
+                }
+                if ui
+                    .add_enabled(
+                        cfg!(any(windows, target_os = "linux")),
+                        egui::Button::selectable(
+                            snapshot.telemetry.source_name == "Le Mans Ultimate",
+                            "Le Mans Ultimate",
                         ),
-                    );
-                    value_row(
-                        ui,
-                        "Engine",
-                        &format!("{:.0} / {:.0} RPM", frame.engine_rpm, frame.engine_max_rpm),
-                    );
-                    let gear = match frame.gear {
-                        -1 => "R".into(),
-                        0 => "N".into(),
-                        gear => gear.to_string(),
-                    };
-                    value_row(ui, "Gear", &gear);
-                });
+                    )
+                    .clicked()
+                {
+                    self.control.select_source(race2love_lmu::native_source);
+                }
+                let mut enabled = snapshot.controls.source_enabled;
+                if ui.checkbox(&mut enabled, "Run telemetry").changed() {
+                    self.control.set_source_enabled(enabled);
+                }
+            });
+            if !cfg!(any(windows, target_os = "linux")) {
+                ui.small(
+                "Native LMU telemetry supports Windows and Linux/Proton. Demo remains available.",
+            );
+            }
             ui.add_space(8.0);
-            let ratio = if frame.engine_max_rpm > 0.0 {
-                frame.engine_rpm / frame.engine_max_rpm
-            } else {
-                0.0
-            };
-            meter(ui, "RPM", ratio);
-            meter(ui, "Throttle", frame.throttle);
-            meter(ui, "Brake", frame.brake);
+            ui.horizontal_wrapped(|ui| {
+                indicator(
+                    ui,
+                    snapshot.telemetry.connected,
+                    &format!("{} connection", snapshot.telemetry.source_name),
+                );
+                indicator(ui, fresh, "Fresh player telemetry");
+                indicator(ui, snapshot.device.connected, &snapshot.device.name);
+            });
+            if let Some(error) = &snapshot.telemetry.error {
+                ui.colored_label(egui::Color32::LIGHT_RED, error);
+            }
+            if let Some(error) = &snapshot.device.error {
+                ui.colored_label(egui::Color32::LIGHT_RED, error);
+            }
+        });
+        ui.add_space(6.0);
+        let frame = snapshot.telemetry.frame.as_ref().filter(|_| fresh);
+        ui.columns(3, |cols| {
+            theme::metric(
+                &mut cols[0],
+                "SPEED",
+                &frame.map_or("—".into(), |f| format!("{:.0}", f.speed_mps * 3.6)),
+                "km/h",
+                theme::TEXT,
+            );
+            theme::metric(
+                &mut cols[1],
+                "ENGINE",
+                &frame.map_or("—".into(), |f| format!("{:.0}", f.engine_rpm)),
+                "RPM",
+                theme::ACCENT,
+            );
+            let gear = frame.map_or("—".into(), |f| match f.gear {
+                -1 => "R".into(),
+                0 => "N".into(),
+                n => n.to_string(),
+            });
+            theme::metric(&mut cols[2], "GEAR", &gear, "Current gear", theme::VIOLET);
+        });
+        ui.add_space(6.0);
+        if ui.available_width() >= 720.0 {
+            ui.columns(2, |cols| {
+                Self::driving_card(&mut cols[0], frame);
+                Self::output_card(&mut cols[1], snapshot);
+            });
         } else {
-            ui.label("Telemetry is paused, unavailable or waiting for fresh player samples.");
+            Self::driving_card(ui, frame);
+            Self::output_card(ui, snapshot);
         }
-        ui.add_space(12.0);
-        meter(ui, "Mixed effects", snapshot.effects.mixed);
-        meter(ui, "Scaled target", snapshot.effects.intensity);
-        meter(ui, "Acknowledged device target", snapshot.device.intensity);
         let levels = snapshot.effects.levels;
         ui.horizontal(|ui| {
             indicator(
@@ -244,15 +268,30 @@ impl Race2LoveApp {
             );
             ui.label(format!("{} shifts since effects reset", levels.shift_count));
         });
-        egui::CollapsingHeader::new("Individual effects").show(ui, |ui| {
-            for (name, value) in [
+        theme::card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            theme::section(
+                ui,
+                "Effect activity",
+                "Live contributions before global intensity",
+            );
+            let signals = [
                 ("Engine", levels.engine),
                 ("Gear pulse", levels.gear_shift),
                 ("Wheel slip", levels.wheel_slip),
                 ("Kerbs / road", levels.road),
                 ("Impact", levels.impact),
-            ] {
-                meter(ui, name, value);
+            ];
+            if ui.available_width() >= 720.0 {
+                ui.columns(5, |cols| {
+                    for (column, (name, value)) in cols.iter_mut().zip(signals) {
+                        meter(column, name, value);
+                    }
+                });
+            } else {
+                for (name, value) in signals {
+                    meter(ui, name, value);
+                }
             }
         });
         if self
@@ -264,19 +303,26 @@ impl Race2LoveApp {
         } else {
             ui.small("Mock output is an in-memory value. Connect Lovense in Devices / Settings for physical output.");
         }
-        ui.separator();
-        percentage_slider(
-            ui,
-            &mut self.config.output.global_intensity,
-            "Global intensity",
-            0.0..=1.0,
-        );
-        percentage_slider(
-            ui,
-            &mut self.config.output.max_intensity,
-            "Maximum output",
-            0.0..=1.0,
-        );
+        theme::card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            theme::section(
+                ui,
+                "Output limits",
+                "Tune the overall strength of your feedback.",
+            );
+            percentage_slider(
+                ui,
+                &mut self.config.output.global_intensity,
+                "Global intensity",
+                0.0..=1.0,
+            );
+            percentage_slider(
+                ui,
+                &mut self.config.output.max_intensity,
+                "Maximum output",
+                0.0..=1.0,
+            );
+        });
         if self.config.ui.show_debug {
             ui.separator();
             ui.label("Normalized signals · optional values remain unavailable unless verified");
@@ -312,45 +358,122 @@ impl Race2LoveApp {
         }
     }
 
-    fn effects(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Engine RPM");
-        let engine = &mut self.config.effects.engine;
-        ui.checkbox(&mut engine.enabled, "Enable engine vibration");
-        ui.add_enabled_ui(engine.enabled, |ui| {
-            percentage_slider(
-                ui,
-                &mut engine.start_ratio,
-                "Start at % of max RPM",
-                0.0..=(engine.end_ratio - 0.01).max(0.0),
-            );
-            percentage_slider(
-                ui,
-                &mut engine.end_ratio,
-                "Full effect at % of max RPM",
-                (engine.start_ratio + 0.01).min(1.0)..=1.0,
-            );
-            percentage_slider(
-                ui,
-                &mut engine.min_intensity,
-                "Minimum vibration",
-                0.0..=engine.max_intensity,
-            );
-            percentage_slider(
-                ui,
-                &mut engine.max_intensity,
-                "Maximum vibration",
-                engine.min_intensity..=1.0,
-            );
-            egui::ComboBox::from_id_salt("rpm_curve")
-                .selected_text(engine.curve.name())
-                .show_ui(ui, |ui| {
-                    for curve in ResponseCurve::ALL {
-                        ui.selectable_value(&mut engine.curve, curve, curve.name());
-                    }
-                });
+    fn driving_card(ui: &mut egui::Ui, frame: Option<&race2love_core::telemetry::TelemetryFrame>) {
+        theme::card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            theme::section(ui, "On track", "");
+            if let Some(frame) = frame {
+                ui.label(
+                    egui::RichText::new(frame.car.as_deref().unwrap_or("Unknown car")).strong(),
+                );
+                ui.label(
+                    egui::RichText::new(frame.session.as_deref().unwrap_or("Unknown session"))
+                        .color(theme::MUTED),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{:.0} / {:.0} RPM",
+                        frame.engine_rpm, frame.engine_max_rpm
+                    ))
+                    .size(12.0)
+                    .color(theme::MUTED),
+                );
+                let ratio = if frame.engine_max_rpm > 0.0 {
+                    frame.engine_rpm / frame.engine_max_rpm
+                } else {
+                    0.0
+                };
+                meter(ui, "RPM", ratio);
+                theme::bar(ui, "Throttle", frame.throttle, theme::ACCENT);
+                theme::bar(ui, "Brake", frame.brake, theme::RED);
+            } else {
+                ui.label("Waiting for a driving session");
+                ui.label(
+                    egui::RichText::new(
+                        "Start Demo, or enter the car in LMU. Live values will appear here.",
+                    )
+                    .color(theme::MUTED),
+                );
+                meter(ui, "RPM", 0.0);
+                theme::bar(ui, "Throttle", 0.0, theme::ACCENT);
+                theme::bar(ui, "Brake", 0.0, theme::RED);
+            }
         });
-        ui.separator();
-        ui.heading("Gear shift");
+    }
+
+    fn output_card(ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
+        theme::card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            theme::section(ui, "Haptic output", &snapshot.device.name);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("{:.0}%", unit(snapshot.device.intensity) * 100.0))
+                        .size(42.0)
+                        .color(theme::VIOLET)
+                        .strong(),
+                );
+                ui.label(egui::RichText::new("Device target").color(theme::MUTED));
+            });
+            meter(ui, "Mixed effects", snapshot.effects.mixed);
+            meter(ui, "Scaled target", snapshot.effects.intensity);
+            theme::bar(
+                ui,
+                "Acknowledged device target",
+                snapshot.device.intensity,
+                theme::VIOLET,
+            );
+        });
+    }
+
+    fn effects(&mut self, ui: &mut egui::Ui) {
+        theme::page_title(
+            ui,
+            "Make it feel like you.",
+            "Tune each effect independently. Changes apply as you drive.",
+        );
+        theme::card().show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            theme::section(ui, "Engine RPM", "A continuous connection to the engine.");
+            let engine = &mut self.config.effects.engine;
+            ui.checkbox(&mut engine.enabled, "Enable engine vibration");
+            ui.add_enabled_ui(engine.enabled, |ui| {
+                percentage_slider(
+                    ui,
+                    &mut engine.start_ratio,
+                    "Start at % of max RPM",
+                    0.0..=(engine.end_ratio - 0.01).max(0.0),
+                );
+                percentage_slider(
+                    ui,
+                    &mut engine.end_ratio,
+                    "Full effect at % of max RPM",
+                    (engine.start_ratio + 0.01).min(1.0)..=1.0,
+                );
+                percentage_slider(
+                    ui,
+                    &mut engine.min_intensity,
+                    "Minimum vibration",
+                    0.0..=engine.max_intensity,
+                );
+                percentage_slider(
+                    ui,
+                    &mut engine.max_intensity,
+                    "Maximum vibration",
+                    engine.min_intensity..=1.0,
+                );
+                egui::ComboBox::from_id_salt("rpm_curve")
+                    .selected_text(engine.curve.name())
+                    .show_ui(ui, |ui| {
+                        for curve in ResponseCurve::ALL {
+                            ui.selectable_value(&mut engine.curve, curve, curve.name());
+                        }
+                    });
+            });
+            theme::engine_preview(ui, engine);
+        });
+        theme::card().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        theme::section(ui, "Gear shift", "A precise pulse with every forward shift.");
         let shift = &mut self.config.effects.gear_shift;
         ui.checkbox(&mut shift.enabled, "Enable shift pulses");
         ui.add_enabled_ui(shift.enabled, |ui| {
@@ -369,50 +492,108 @@ impl Race2LoveApp {
             self.config.output.update_hz,
             1000.0 / f64::from(self.config.output.update_hz)
         ));
-        ui.separator();
-        egui::CollapsingHeader::new("Wheel slip").show(ui, |ui| {
+        });
+        effect_card(ui, "Wheel slip", |ui| {
             let slip = &mut self.config.effects.wheel_slip;
             ui.checkbox(&mut slip.enabled, "Enable wheel slip");
-            percentage_slider(ui, &mut slip.threshold, "Sliding contact threshold", 0.0..=1.0);
+            percentage_slider(
+                ui,
+                &mut slip.threshold,
+                "Sliding contact threshold",
+                0.0..=1.0,
+            );
             ui.add(egui::Slider::new(&mut slip.gain, 0.0..=10.0).text("Slip gain"));
-            percentage_slider(ui, &mut slip.max_intensity, "Slip maximum intensity", 0.0..=1.0);
+            percentage_slider(
+                ui,
+                &mut slip.max_intensity,
+                "Slip maximum intensity",
+                0.0..=1.0,
+            );
             ui.small("LMU: maximum loaded-wheel sliding contact fraction (not longitudinal slip ratio). Active above 3 m/s.");
         });
-        egui::CollapsingHeader::new("Kerbs / road").show(ui, |ui| {
+        effect_card(ui, "Kerbs / road", |ui| {
             let road = &mut self.config.effects.road;
             ui.checkbox(&mut road.enabled, "Enable kerbs / road");
-            ui.add(egui::Slider::new(&mut road.threshold_mps, 0.0..=5.0).text("Travel speed threshold (m/s)"));
+            ui.add(
+                egui::Slider::new(&mut road.threshold_mps, 0.0..=5.0)
+                    .text("Travel speed threshold (m/s)"),
+            );
             ui.add(egui::Slider::new(&mut road.gain, 0.0..=10.0).text("Road gain"));
-            percentage_slider(ui, &mut road.kerb_intensity, "Kerb contact intensity", 0.0..=1.0);
-            percentage_slider(ui, &mut road.max_intensity, "Road maximum intensity", 0.0..=1.0);
-            ui.add(egui::Slider::new(&mut road.acceleration_threshold_mps2, 0.0..=10.0).text("Vertical vibration threshold (m/s²)"));
-            ui.add(egui::Slider::new(&mut road.acceleration_gain, 0.0..=2.0).text("Vertical vibration gain"));
+            percentage_slider(
+                ui,
+                &mut road.kerb_intensity,
+                "Kerb contact intensity",
+                0.0..=1.0,
+            );
+            percentage_slider(
+                ui,
+                &mut road.max_intensity,
+                "Road maximum intensity",
+                0.0..=1.0,
+            );
+            ui.add(
+                egui::Slider::new(&mut road.acceleration_threshold_mps2, 0.0..=10.0)
+                    .text("Vertical vibration threshold (m/s²)"),
+            );
+            ui.add(
+                egui::Slider::new(&mut road.acceleration_gain, 0.0..=2.0)
+                    .text("Vertical vibration gain"),
+            );
             ui.small("Road feedback uses suspension movement and vertical vibration, even when LMU leaves rumble-strip flags false. Explicit loaded-tyre kerb contact also supplies kerb intensity. All are capped by Road maximum and active above 3 m/s. Bumps/grass can also trigger this effect.");
         });
-        egui::CollapsingHeader::new("Collision / impact").show(ui, |ui| {
+        effect_card(ui, "Collision / impact", |ui| {
             let impact = &mut self.config.effects.impact;
             ui.checkbox(&mut impact.enabled, "Enable impacts");
-            percentage_slider(ui, &mut impact.threshold, "Impact severity threshold", 0.0..=1.0);
-            percentage_slider(ui, &mut impact.intensity, "Impact pulse intensity", 0.0..=1.0);
+            percentage_slider(
+                ui,
+                &mut impact.threshold,
+                "Impact severity threshold",
+                0.0..=1.0,
+            );
+            percentage_slider(
+                ui,
+                &mut impact.intensity,
+                "Impact pulse intensity",
+                0.0..=1.0,
+            );
             ui.small("LMU: a new explicit impact event, with acceleration / 100 m/s² as estimated severity. One pulse per event; braking alone cannot trigger it.");
         });
-        egui::CollapsingHeader::new("Effect profiles").show(ui, |ui| {
+        effect_card(ui, "Effect profiles", |ui| {
             ui.small("Profiles contain effects only. Device settings and global safety limits stay as configured.");
-            egui::ComboBox::from_id_salt("effect_profile").selected_text(&self.profile_name).show_ui(ui, |ui| {
-                for name in self.config.effect_profiles.keys() { ui.selectable_value(&mut self.profile_name, name.clone(), name); }
-            });
+            egui::ComboBox::from_id_salt("effect_profile")
+                .selected_text(&self.profile_name)
+                .show_ui(ui, |ui| {
+                    for name in self.config.effect_profiles.keys() {
+                        ui.selectable_value(&mut self.profile_name, name.clone(), name);
+                    }
+                });
             ui.add(egui::TextEdit::singleline(&mut self.profile_name).char_limit(48));
             ui.horizontal(|ui| {
                 let name = self.profile_name.trim().to_owned();
-                let valid = !name.is_empty() && name.len() <= 48 && !name.chars().any(char::is_control);
-                let room = self.config.effect_profiles.contains_key(&name) || self.config.effect_profiles.len() < 16;
-                if ui.add_enabled(valid && room, egui::Button::new("Store profile")).clicked() {
-                    self.config.effect_profiles.insert(name.clone(), self.config.effects.clone());
+                let valid =
+                    !name.is_empty() && name.len() <= 48 && !name.chars().any(char::is_control);
+                let room = self.config.effect_profiles.contains_key(&name)
+                    || self.config.effect_profiles.len() < 16;
+                if ui
+                    .add_enabled(valid && room, egui::Button::new("Store profile"))
+                    .clicked()
+                {
+                    self.config
+                        .effect_profiles
+                        .insert(name.clone(), self.config.effects.clone());
                 }
-                if ui.add_enabled(self.config.effect_profiles.contains_key(&name), egui::Button::new("Apply profile")).clicked() {
+                if ui
+                    .add_enabled(
+                        self.config.effect_profiles.contains_key(&name),
+                        egui::Button::new("Apply profile"),
+                    )
+                    .clicked()
+                {
                     self.config.effects = self.config.effect_profiles[&name].clone();
                 }
-                if ui.button("Delete profile").clicked() { self.config.effect_profiles.remove(&name); }
+                if ui.button("Delete profile").clicked() {
+                    self.config.effect_profiles.remove(&name);
+                }
             });
         });
         ui.add_space(12.0);
@@ -432,7 +613,14 @@ impl Race2LoveApp {
     }
 
     fn settings(&mut self, ui: &mut egui::Ui, snapshot: &RuntimeSnapshot) {
-        ui.heading("Lovense Remote / Game Mode");
+        theme::page_title(
+            ui,
+            "Connect to the drive.",
+            "Your devices, connection preferences and application settings.",
+        );
+        theme::card().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        theme::section(ui, "Lovense Remote / Game Mode", "Local control. Your chosen device.");
         ui.label("Enable LAN in Remote, then enter its address and port. Connect discovers toys.");
         ui.horizontal(|ui| {
             ui.label("Protocol");
@@ -570,8 +758,10 @@ impl Race2LoveApp {
             ui.label("Lovense connection worker is unavailable in this view.");
         }
         ui.small("HTTPS requires a valid certificate hostname. Address changes apply on Connect; no cloud or LAN scanning.");
-        ui.separator();
-        ui.heading("Application");
+        });
+        theme::card().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        theme::section(ui, "Application", "Make Race2Love fit your setup.");
         ui.checkbox(
             &mut self.config.ui.start_minimized,
             "Start minimized on the next launch",
@@ -607,11 +797,16 @@ impl Race2LoveApp {
             self.save_settings();
         }
         ui.small("Changed settings are also saved on normal exit. Runtime state is never saved.");
+        });
     }
 }
 
 impl eframe::App for Race2LoveApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if !self.styled {
+            theme::apply(ui.ctx());
+            self.styled = true;
+        }
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
             self.control.emergency_stop();
         }
@@ -626,26 +821,92 @@ impl eframe::App for Race2LoveApp {
             self.history.clear();
         }
         let before = self.config.clone();
-        egui::Frame::central_panel(ui.style()).show(ui, |ui| {
-            self.header(ui, &snapshot);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                match self.page {
-                    Page::Dashboard => self.dashboard(ui, &snapshot),
-                    Page::Effects => self.effects(ui),
-                    Page::Settings => self.settings(ui, &snapshot),
+        egui::Frame::central_panel(ui.style())
+            .inner_margin(18)
+            .show(ui, |ui| {
+                self.header(ui, &snapshot);
+                ui.separator();
+                if ui.available_width() >= 1000.0 {
+                    egui::Panel::left("navigation")
+                        .exact_size(198.0)
+                        .resizable(false)
+                        .frame(
+                            egui::Frame::new()
+                                .fill(theme::BG)
+                                .inner_margin(egui::Margin {
+                                    left: 0,
+                                    right: 18,
+                                    top: 18,
+                                    bottom: 0,
+                                }),
+                        )
+                        .show_inside(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new("WORKSPACE")
+                                    .size(10.0)
+                                    .color(theme::MUTED),
+                            );
+                            self.navigation(ui, true);
+                            ui.separator();
+                            if ui.button("Save settings").clicked() {
+                                self.save_settings();
+                            }
+                            ui.label(
+                                egui::RichText::new(if self.dirty {
+                                    "Unsaved changes"
+                                } else {
+                                    "Settings up to date"
+                                })
+                                .size(12.0)
+                                .color(theme::MUTED),
+                            );
+                        });
+                } else {
+                    ui.horizontal_wrapped(|ui| self.navigation(ui, false));
+                    ui.add_space(4.0);
                 }
-                if let Some(error) = &self.config_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                }
-                if let Some(message) = &self.message {
-                    ui.separator();
-                    ui.label(message);
-                }
-                if self.dirty {
-                    ui.small("Settings changed · save now or close normally to save");
-                }
+                egui::Frame::new()
+                    .inner_margin(egui::Margin {
+                        left: if ui.available_width() >= 720.0 { 12 } else { 0 },
+                        right: 2,
+                        top: 0,
+                        bottom: 0,
+                    })
+                    .show(ui, |ui| {
+                        egui::ScrollArea::vertical()
+                            .id_salt(match self.page {
+                                Page::Dashboard => "dashboard_scroll",
+                                Page::Effects => "effects_scroll",
+                                Page::Settings => "settings_scroll",
+                            })
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.add_space(8.0);
+                                match self.page {
+                                    Page::Dashboard => self.dashboard(ui, &snapshot),
+                                    Page::Effects => self.effects(ui),
+                                    Page::Settings => self.settings(ui, &snapshot),
+                                }
+                                if let Some(error) = &self.config_error {
+                                    ui.colored_label(theme::RED, error);
+                                }
+                                if let Some(message) = &self.message {
+                                    ui.separator();
+                                    ui.label(message);
+                                }
+                                if self.dirty {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Unsaved changes · saved on normal exit",
+                                        )
+                                        .size(12.0)
+                                        .color(theme::MUTED),
+                                    );
+                                }
+                                ui.add_space(16.0);
+                            });
+                    });
             });
-        });
         if self.config != before {
             self.dirty = true;
             if self.config.lovense != before.lovense && self.lovense.is_some() {
@@ -680,9 +941,9 @@ impl eframe::App for Race2LoveApp {
 
 fn indicator(ui: &mut egui::Ui, connected: bool, label: &str) {
     let color = if connected {
-        egui::Color32::from_rgb(90, 200, 120)
+        theme::ACCENT
     } else {
-        egui::Color32::GRAY
+        theme::MUTED
     };
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
@@ -691,16 +952,17 @@ fn indicator(ui: &mut egui::Ui, connected: bool, label: &str) {
     });
 }
 
-fn value_row(ui: &mut egui::Ui, label: &str, value: &str) {
-    ui.label(label);
-    ui.strong(value);
-    ui.end_row();
+fn effect_card(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::Ui)) {
+    theme::card().show(ui, |ui| {
+        ui.set_min_width(ui.available_width());
+        egui::CollapsingHeader::new(egui::RichText::new(title).size(18.0).strong())
+            .default_open(false)
+            .show(ui, contents);
+    });
 }
 
 fn meter(ui: &mut egui::Ui, label: &str, value: f32) {
-    ui.add(
-        egui::ProgressBar::new(unit(value)).text(format!("{label} · {:.0}%", unit(value) * 100.0)),
-    );
+    theme::bar(ui, label, value, theme::ACCENT);
 }
 
 fn percentage_slider(
@@ -735,8 +997,8 @@ pub fn run(
 ) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([880.0, 720.0])
-            .with_min_inner_size([620.0, 480.0])
+            .with_inner_size([1200.0, 860.0])
+            .with_min_inner_size([620.0, 540.0])
             .with_app_id("race2love")
             .with_icon(egui::IconData::default()),
         renderer: eframe::Renderer::Glow,
@@ -770,6 +1032,7 @@ mod tests {
         context: egui::Context,
         frame: eframe::Frame,
         time: f64,
+        size: egui::Vec2,
     }
 
     impl TestUi {
@@ -778,6 +1041,7 @@ mod tests {
                 context: egui::Context::default(),
                 frame: eframe::Frame::_new_kittest(),
                 time: 0.0,
+                size: egui::vec2(880.0, 1400.0),
             }
         }
 
@@ -785,10 +1049,7 @@ mod tests {
             self.time += 1.0 / 30.0;
             self.context.run_ui(
                 egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(
-                        egui::Pos2::ZERO,
-                        egui::vec2(880.0, 1400.0),
-                    )),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)),
                     time: Some(self.time),
                     events,
                     ..Default::default()
@@ -991,7 +1252,7 @@ mod tests {
         for expected in [
             "Fixture GT3",
             "Race · Spa",
-            "180 km/h  (50.0 m/s)",
+            "180",
             "7000 / 8000 RPM",
             "4",
             "Throttle · 75%",
@@ -1026,5 +1287,64 @@ mod tests {
             );
         }
         runtime.shutdown().await;
+    }
+    #[tokio::test]
+    async fn safety_controls_remain_visible_on_every_page_after_scrolling() {
+        let device = Arc::new(MockDevice::default());
+        let runtime = RaceRuntime::spawn(
+            Box::new(DemoSource::default()),
+            device.clone(),
+            Config::default(),
+        )
+        .unwrap();
+        let mut app = Race2LoveApp::new(runtime.control.clone(), Config::default(), None, None);
+        let mut ui = TestUi::new();
+        wait_for(|| device.intensity() > 0.0).await;
+        for size in [egui::vec2(620.0, 540.0), egui::vec2(1200.0, 860.0)] {
+            ui.size = size;
+            for page in [Page::Dashboard, Page::Effects, Page::Settings] {
+                app.page = page;
+                ui.render(&mut app, vec![]);
+                ui.render(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(egui::pos2(size.x - 60.0, size.y - 60.0)),
+                        egui::Event::MouseWheel {
+                            phase: egui::TouchPhase::Move,
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -2000.0),
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+                let output = ui.render(&mut app, vec![]);
+                let stop = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| {
+                        if let egui::epaint::Shape::Text(text) = &shape.shape
+                            && text.galley.job.text == "EMERGENCY STOP · Esc"
+                        {
+                            Some((
+                                egui::Rect::from_min_size(text.pos, text.galley.size()),
+                                shape.clip_rect,
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                    .expect("Stop is visible");
+                assert!(stop.1.contains_rect(stop.0));
+                assert!(stop.0.bottom() < 90.0);
+                assert!(stop.0.right() < size.x);
+                ui.click(&mut app, "EMERGENCY STOP · Esc");
+                wait_for(|| device.intensity() == 0.0).await;
+                assert!(runtime.control.snapshot().controls.emergency_stopped);
+                ui.click(&mut app, "Resume output");
+                assert!(!runtime.control.snapshot().controls.emergency_stopped);
+            }
+        }
+        runtime.shutdown().await;
+        assert_eq!(device.intensity(), 0.0);
     }
 }
