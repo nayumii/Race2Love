@@ -15,7 +15,7 @@ Windows x64 static assertions. Both operating systems use this same decoder.
 
 | Effect/data | SDK field and offset | Conversion / limitation |
 | --- | --- | --- |
-| Slip | Wheel `mGripFract` +112, `mTireLoad` +104 | Maximum loaded-wheel sliding contact-patch fraction, 0–1. Not longitudinal slip ratio. Loads below 50 N contribute zero. |
+| Slip | Wheel `mGripFract` +112, patch/ground velocities +48/+56/+64/+72, `mTireLoad` +104 | Maximum loaded-wheel sliding contact-patch fraction, with a normalized patch-vs-ground velocity fallback when `mGripFract` is zero. Loads below 50 N contribute zero; stationary wheel ground speed below 1 m/s contributes zero. |
 | Suspension speed | Wheel `mSuspensionDeflection` +0 | Difference in metres divided by **game elapsed time**. Requires two valid samples, 1/240–0.25 s apart; reject speeds beyond ±20 m/s. Reset across player/session changes. |
 | Vertical vibration | `mLocalAccel.y` +216 | Body-local m/s², minus a 200 ms low-pass baseline; absolute residual. No assumption about removal of gravity. Initialize/reset baseline without an onset pulse. |
 | Explicit kerb contact | Wheel `mSurfaceType` +176 | Code 5 is rumble strip; require at least 50 N tyre load. Some tracks leave all four flags false even over kerbs. |

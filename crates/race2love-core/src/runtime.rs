@@ -346,6 +346,8 @@ async fn telemetry_task(
     let mut clock_hz = config.borrow().output.telemetry_hz;
     let mut next_attempt = Instant::now();
     let mut snapshot = state.borrow().clone();
+    let mut healthy_frames = 0u8;
+    let mut consecutive_errors = 0u8;
     loop {
         tokio::select! {
             biased;
@@ -360,6 +362,8 @@ async fn telemetry_task(
                         source_generation: selection.generation,
                         source_name: source.name(), connected: false, frame: None, error: None,
                     };
+                    healthy_frames = 0;
+                    consecutive_errors = 0;
                     next_attempt = Instant::now();
                     tracing::info!(source = source.name(), "Telemetry source selected");
                 }
@@ -393,7 +397,6 @@ async fn telemetry_task(
                 match source.connect() {
                     Ok(()) => {
                         tracing::info!(source = source.name(), "Telemetry connected");
-                        snapshot.error = None;
                     }
                     Err(error) => {
                         let message = error.to_string();
@@ -408,29 +411,39 @@ async fn telemetry_task(
                 match source.read_frame() {
                     Ok(Some(frame)) => {
                         snapshot.frame = Some(frame);
-                        snapshot.error = None;
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        let message = error.to_string();
-                        if snapshot.error.as_ref() != Some(&message) {
-                            tracing::warn!(%error, "Telemetry unavailable");
+                        consecutive_errors = 0;
+                        healthy_frames = healthy_frames.saturating_add(1);
+                        // Keep intermittent read errors visible long enough to
+                        // be useful instead of flickering on every frame.
+                        if healthy_frames >= 30 {
+                            snapshot.error = None;
                         }
-                        snapshot.error = Some(message);
+                    }
+                    Ok(None) => {
+                        healthy_frames = 0;
+                    }
+                    Err(error) => {
+                        consecutive_errors = consecutive_errors.saturating_add(1);
+                        let message = error.to_string();
                         if !matches!(error, TelemetryError::Waiting(_)) {
+                            tracing::warn!(%error, "Telemetry unavailable");
+                            snapshot.error = Some(message);
                             source.disconnect();
+                        } else if consecutive_errors >= 2
+                            && snapshot.error.as_ref() != Some(&message)
+                        {
+                            tracing::warn!(%error, "Telemetry unavailable");
+                            snapshot.error = Some(message);
                         }
                         snapshot.frame = None;
+                        healthy_frames = 0;
                         next_attempt = Instant::now() + Duration::from_secs(1);
                     }
                 }
             }
             snapshot.connected = source.is_connected();
         }
-        let desired_hz = if controls.borrow().source_enabled
-            && source.is_connected()
-            && snapshot.error.is_none()
-        {
+        let desired_hz = if controls.borrow().source_enabled && source.is_connected() {
             config.borrow().output.telemetry_hz
         } else {
             1
@@ -671,6 +684,12 @@ async fn output_task(
                     control.emergency_stopped = true;
                     control.test_pulse = None;
                 });
+            }
+            // A Lovense reconnect is transient during normal LMU sessions. Its
+            // backend does not request a manual resume, so clear the old fault
+            // latch and continue automatically after the zero-output cycle.
+            if connected {
+                fault_latched = false;
             }
             gate.reset();
             was_connected = connected;

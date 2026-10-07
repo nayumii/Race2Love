@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/race2love-banner.png" alt="Race2Love telemetry flowing from an endurance racing car" width="100%">
+<a href="https://store.steampowered.com/app/2399420/Le_Mans_Ultimate/"><img src="https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/2399420/f510badbf573eecdf529ae735a49331f4b9919be/header.jpg" alt="Le Mans Ultimate" width="100%"></a>
 
 # Race2Love
 
@@ -92,6 +92,24 @@ shutdown all stop output safely.
 Release readiness includes reproducible Linux and Windows packages, checksums,
 CI artifacts and dependency notices. Read the [roadmap](docs/ROADMAP.md) and
 [validation record](docs/VALIDATION.md) for the current status.
+
+> Banner image: official **Le Mans Ultimate** artwork served from the [Steam
+> store page](https://store.steampowered.com/app/2399420/Le_Mans_Ultimate/), © Studio
+> 397 / Steam. Race2Love is an independent telemetry companion and is not
+> affiliated with Studio 397, Motorsport Games or Valve.
+
+## Screenshots
+
+The application UI is native `egui` and is best viewed at its normal desktop
+size. These captures show the feedback-first Dashboard and the effect tuning
+workspace:
+
+<div align="center">
+
+<img src="assets/Screenshot_20261007_162034.png" alt="Race2Love Dashboard with LMU selected and mixer output graph" width="49%">
+<img src="assets/Screenshot_20261007_162112.png" alt="Race2Love Effects page with RPM and gear shift controls" width="49%">
+
+</div>
 
 ## Linux setup
 
@@ -273,15 +291,16 @@ RUST_LOG=race2love_core=debug cargo run -- --demo
 
 The runtime stops on emergency stop, source pause/disconnection, missing/stale
 telemetry (250 ms by default), effects worker failure/stalled heartbeat, and normal
-application shutdown. Device connection transitions get a stop before output
-resumes. Commands and stops have bounded timeouts. Communication failures latch
-output off; only an explicit Stop/Resume permits another attempt. A best-effort
-stop is attempted once after an output failure, with no endless retry loop.
+application shutdown. These are bounded output stops; a transient Lovense Remote
+or toy disconnect is retried automatically and does not latch the UI into a
+manual Resume state. Commands and stops have bounded timeouts.
 
 Lovense output always targets one explicitly selected toy. Positive commands use
 `timeSec = 2`, `stopPrevious = 1`, and a 500 ms renewal interval. Zero intensity
-sends Stop. Source/device switches stop previous output. Reconnected devices stay
-stopped until Resume; automatic connection retries stop after five attempts.
+sends Stop. Source/device switches stop previous output. Lovense connection retries
+use bounded backoff (up to five attempts), then remain visible as an error until
+the user reconnects. Choose the Emergency Stop key in Devices / Settings; Esc, F8,
+F9, F10 and Disabled are available.
 
 The one-second manual Test intentionally works without game telemetry, pauses
 Demo, and respects emergency stop and both intensity limits. It leaves Demo
@@ -345,7 +364,7 @@ their limitations and sensitivity controls.
 5. Pause Demo on Dashboard, click **Resume output**, then use **Test vibration**.
    The test lasts one second at 40% × global intensity, capped by maximum intensity.
 6. Enable Demo to run the RPM/shift pipeline with synthetic telemetry. Use
-   **Emergency Stop** at any time. **Disconnect / Use Demo output** stops the toy
+   **Emergency Stop** at any time. **Disconnect / Use mock output** stops the toy
    and returns to mock output with emergency stop latched.
 
 Mobile setup and the HTTP preset follow the [official Game Mode demo](https://developer.lovense.com/standard-api-demo-game-mode).
@@ -357,8 +376,8 @@ addresses may fail verification. Certificate verification is never disabled.
 
 Discovery asks the configured Remote for its toys. There is no automatic LAN
 scan, QR/cloud discovery, developer token, or auto-connect on launch. Reconnects
-use bounded backoff; Resume is always required before output returns. Endpoint
-errors appear in the GUI and technical details are logged.
+use bounded backoff and resume output automatically after a transient toy or
+Remote restart. Endpoint errors appear in the GUI and technical details are logged.
 
 ## Development checks and next phase
 

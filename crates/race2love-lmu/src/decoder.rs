@@ -74,8 +74,32 @@ pub fn decode(bytes: &[u8], observed: Instant) -> Result<Option<DecodedFrame>, D
     let wheel_slip = optional_four(|index| {
         let wheel = wheels[index];
         let load = optional_number(wheel, TIRE_LOAD, 0.0, 1e7)?;
-        let sliding = optional_number(wheel, SLIDING_FRACTION, 0.0, 1.0)?;
-        Some(if load >= 50.0 { sliding } else { 0.0 })
+        if load < 50.0 {
+            return Some(0.0);
+        }
+        // mGripFract is the best direct signal, but some LMU builds report it
+        // as zero even while the contact patch is sliding. The SDK also exposes
+        // patch and ground velocities; their normalized difference is a useful
+        // fallback for longitudinal and lateral slip.
+        let sliding = optional_number(wheel, SLIDING_FRACTION, 0.0, 1.0).unwrap_or(0.0);
+        let kinematic = match (
+            optional_number(wheel, LATERAL_PATCH_VELOCITY, -2_000.0, 2_000.0),
+            optional_number(wheel, LONGITUDINAL_PATCH_VELOCITY, -2_000.0, 2_000.0),
+            optional_number(wheel, LATERAL_GROUND_VELOCITY, -2_000.0, 2_000.0),
+            optional_number(wheel, LONGITUDINAL_GROUND_VELOCITY, -2_000.0, 2_000.0),
+        ) {
+            (Some(patch_lat), Some(patch_long), Some(ground_lat), Some(ground_long)) => {
+                let relative = (patch_lat - ground_lat).hypot(patch_long - ground_long);
+                let ground_speed = ground_lat.hypot(ground_long);
+                if ground_speed >= 1.0 {
+                    (relative / ground_speed).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                }
+            }
+            _ => 0.0,
+        };
+        Some(sliding.max(kinematic))
     });
     let kerb_contact = wheels
         .iter()

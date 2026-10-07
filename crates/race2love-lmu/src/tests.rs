@@ -119,7 +119,7 @@ fn optional_wheel_and_event_fields_have_verified_units_and_fail_independently() 
     put_float(&mut bytes, base + WHEELS + SLIDING_FRACTION, f64::NAN);
     put_float(&mut bytes, base + ACCELERATION + 8, f64::INFINITY);
     let decoded = decode(&bytes, Instant::now()).unwrap().unwrap();
-    assert!(decoded.frame.wheel_slip.is_none());
+    assert_eq!(decoded.frame.wheel_slip, Some([0.0, 0.1, 0.2, 0.3]));
     assert!(decoded.frame.vertical_acceleration.is_none() && decoded.frame.impact.is_none());
     assert_eq!(decoded.frame.gear, 4); // Malformed optional fields do not break RPM/gear.
     put_float(&mut bytes, base + ACCELERATION + 8, 30.0);
@@ -132,6 +132,25 @@ fn optional_wheel_and_event_fields_have_verified_units_and_fail_independently() 
             .impact,
         Some(0.0)
     );
+}
+
+#[test]
+fn wheel_slip_uses_velocity_difference_when_grip_fraction_is_zero() {
+    let mut bytes = fixture(0, 123.5);
+    let wheel = VEHICLES + WHEELS;
+    put_float(&mut bytes, wheel + TIRE_LOAD, 1_000.0);
+    put_float(&mut bytes, wheel + LATERAL_PATCH_VELOCITY, 0.0);
+    put_float(&mut bytes, wheel + LONGITUDINAL_PATCH_VELOCITY, 6.0);
+    put_float(&mut bytes, wheel + LATERAL_GROUND_VELOCITY, 0.0);
+    put_float(&mut bytes, wheel + LONGITUDINAL_GROUND_VELOCITY, 3.0);
+    put_float(&mut bytes, wheel + SLIDING_FRACTION, 0.0);
+    let slip = decode(&bytes, Instant::now())
+        .unwrap()
+        .unwrap()
+        .frame
+        .wheel_slip
+        .unwrap()[0];
+    assert!((slip - 1.0).abs() < f32::EPSILON);
 }
 
 #[test]

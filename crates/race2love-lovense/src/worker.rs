@@ -168,7 +168,7 @@ impl HapticDevice for LovenseDevice {
         self.state.borrow().epoch
     }
     fn requires_resume_on_connect(&self) -> bool {
-        true
+        false
     }
 }
 

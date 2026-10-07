@@ -56,3 +56,4 @@ start_minimized = false
 show_debug = false
 refresh_hz = 30
 show_graphs = false
+emergency_stop_key = "escape" # escape, f8, f9, f10, disabled

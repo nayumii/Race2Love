@@ -5,7 +5,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use eframe::egui;
 use race2love_core::{
-    config::{Config, LocalProtocol},
+    config::{Config, EmergencyStopKey, LocalProtocol},
     devices::HapticDevice,
     effects::ResponseCurve,
     runtime::{RuntimeControl, RuntimeSnapshot, StopReason, telemetry_is_fresh},
@@ -112,16 +112,16 @@ impl Race2LoveApp {
         ui.horizontal_wrapped(|ui| {
             theme::brand(ui);
             ui.add_space(12.0);
+            let stop_label = match self.config.ui.emergency_stop_key {
+                EmergencyStopKey::Disabled => "EMERGENCY STOP".to_owned(),
+                key => format!("EMERGENCY STOP · {}", key.label()),
+            };
             if ui
                 .add(
-                    egui::Button::new(
-                        egui::RichText::new("EMERGENCY STOP · Esc")
-                            .color(theme::RED)
-                            .strong(),
-                    )
-                    .fill(egui::Color32::from_rgb(64, 29, 42))
-                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(112, 49, 64)))
-                    .min_size(egui::vec2(0.0, 38.0)),
+                    egui::Button::new(egui::RichText::new(stop_label).color(theme::RED).strong())
+                        .fill(egui::Color32::from_rgb(64, 29, 42))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(112, 49, 64)))
+                        .min_size(egui::vec2(0.0, 38.0)),
                 )
                 .clicked()
             {
@@ -203,10 +203,6 @@ impl Race2LoveApp {
                 {
                     self.control.select_source(race2love_lmu::native_source);
                 }
-                let mut enabled = snapshot.controls.source_enabled;
-                if ui.checkbox(&mut enabled, "Enable game input").changed() {
-                    self.control.set_source_enabled(enabled);
-                }
             });
             if !cfg!(any(windows, target_os = "linux")) {
                 ui.small(
@@ -278,7 +274,7 @@ impl Race2LoveApp {
             ui.small("Feedback is routed to your selected device.");
         } else {
             ui.small(
-                "Demo output is active. Connect a device in Devices / Settings to feel feedback.",
+                "Mock output is active. Connect a Lovense device in Devices / Settings to feel feedback.",
             );
         }
         theme::card().show(ui, |ui| {
@@ -718,7 +714,7 @@ impl Race2LoveApp {
                     self.control.select_device(device.clone());
                     lovense.connect(self.config.lovense.clone());
                 }
-                if ui.button("Disconnect / Use Demo output").clicked() {
+                if ui.button("Disconnect / Use mock output").clicked() {
                     self.control.emergency_stop();
                     lovense.disconnect();
                     self.control.select_device(demo.clone());
@@ -804,6 +800,15 @@ impl Race2LoveApp {
             &mut self.config.ui.show_debug,
             "Debug mode",
         );
+        egui::ComboBox::from_id_salt("emergency_stop_key")
+            .selected_text(self.config.ui.emergency_stop_key.label())
+            .show_ui(ui, |ui| {
+                ui.label("Emergency stop key");
+                for key in EmergencyStopKey::ALL {
+                    ui.selectable_value(&mut self.config.ui.emergency_stop_key, key, key.label());
+                }
+            });
+        ui.small("A Remote reconnect resumes automatically. Stop output with the button or configured key.");
         if self.config.ui.show_debug {
         ui.add(egui::Slider::new(&mut self.config.ui.refresh_hz, 1..=60).text("UI refresh (Hz)"));
         ui.add(
@@ -842,7 +847,14 @@ impl eframe::App for Race2LoveApp {
             theme::apply(ui.ctx());
             self.styled = true;
         }
-        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+        let stop_key_pressed = match self.config.ui.emergency_stop_key {
+            EmergencyStopKey::Escape => ui.input(|input| input.key_pressed(egui::Key::Escape)),
+            EmergencyStopKey::F8 => ui.input(|input| input.key_pressed(egui::Key::F8)),
+            EmergencyStopKey::F9 => ui.input(|input| input.key_pressed(egui::Key::F9)),
+            EmergencyStopKey::F10 => ui.input(|input| input.key_pressed(egui::Key::F10)),
+            EmergencyStopKey::Disabled => false,
+        };
+        if stop_key_pressed {
             self.control.emergency_stop();
         }
         let snapshot = self.control.snapshot();
@@ -1192,8 +1204,6 @@ mod tests {
         assert_eq!(Config::load(&path).unwrap(), app.config);
         assert!(!app.dirty);
         ui.click(&mut app, "Dashboard");
-        ui.click(&mut app, "Enable game input");
-        wait_for(|| !runtime.control.snapshot().telemetry.connected).await;
         assert_eq!(device.intensity(), 0.0);
         ui.render(
             &mut app,
@@ -1238,7 +1248,7 @@ mod tests {
         assert!(service.control.snapshot().error.unwrap().contains("port"));
         assert!(runtime.control.snapshot().controls.emergency_stopped);
         wait_for(|| demo.intensity() == 0.0).await;
-        ui.click(&mut app, "Disconnect / Use Demo output");
+        ui.click(&mut app, "Disconnect / Use mock output");
         wait_for(|| runtime.control.snapshot().device.name == demo.name()).await;
         assert_eq!(demo.intensity(), 0.0);
         ui.click(&mut app, "Resume output");

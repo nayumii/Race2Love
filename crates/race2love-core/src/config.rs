@@ -270,6 +270,32 @@ pub struct UiConfig {
     pub show_debug: bool,
     pub refresh_hz: u32,
     pub show_graphs: bool,
+    pub emergency_stop_key: EmergencyStopKey,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmergencyStopKey {
+    #[default]
+    Escape,
+    F8,
+    F9,
+    F10,
+    Disabled,
+}
+
+impl EmergencyStopKey {
+    pub const ALL: [Self; 5] = [Self::Escape, Self::F8, Self::F9, Self::F10, Self::Disabled];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Escape => "Esc",
+            Self::F8 => "F8",
+            Self::F9 => "F9",
+            Self::F10 => "F10",
+            Self::Disabled => "Disabled",
+        }
+    }
 }
 
 impl Default for UiConfig {
@@ -279,6 +305,7 @@ impl Default for UiConfig {
             show_debug: false,
             refresh_hz: 30,
             show_graphs: false,
+            emergency_stop_key: EmergencyStopKey::Escape,
         }
     }
 }

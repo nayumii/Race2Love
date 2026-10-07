@@ -38,14 +38,16 @@ and checksum before deciding whether to run it.
 1. Pair your device in Lovense Remote and enable Allow Control / Game Mode LAN.
 2. In Race2Love's Devices / Settings, enter Remote's IP/host and displayed port.
    Protocol and the local HTTP preset are under Connection options.
-3. Connect, explicitly select a device, then Resume output in the top bar.
+3. Connect, explicitly select a device, then Resume output in the top bar for the
+   initial session. A transient Remote/toy reconnect resumes automatically.
 4. Use the one-second test or start driving. Start with a comfortable global
-   intensity and maximum output. Esc or Emergency Stop stops feedback.
+   intensity and maximum output. Emergency Stop stops feedback; its key can be
+   configured as Esc, F8, F9, F10 or Disabled.
 
 Race2Love starts with Demo and mock output, so opening it never auto-selects a
-physical device. Switching game/device stops output until Resume. Testing pauses
-game input; enable it again when returning to racing. Direct Vibrate is the tested
-default; experimental Pattern modes are optional under Connection options.
+physical device. Testing pauses game input; enable it again when returning to
+racing. Direct Vibrate is the tested default; experimental Pattern modes are
+optional under Connection options.
 
 Dashboard emphasizes mixer/device output and effect activity. Speed, RPM, gear,
 raw graphs and technical settings are under Devices / Settings → Debug mode.
