@@ -30,10 +30,12 @@ pub const LATERAL_PATCH_VELOCITY: usize = 48;
 pub const LONGITUDINAL_PATCH_VELOCITY: usize = 56;
 pub const LATERAL_GROUND_VELOCITY: usize = 64;
 pub const LONGITUDINAL_GROUND_VELOCITY: usize = 72;
+pub const ROTATION: usize = 40;
 pub const TIRE_LOAD: usize = 104;
 pub const SLIDING_FRACTION: usize = 112;
 pub const TERRAIN_NAME: usize = 160;
 pub const SURFACE_TYPE: usize = 176;
+pub const STATIC_UNDEFLECTED_RADIUS: usize = 179;
 
 const _: () = assert!(WHEELS + 4 * WHEEL_SIZE == VEHICLE_SIZE);
 

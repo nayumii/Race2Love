@@ -154,6 +154,28 @@ fn wheel_slip_uses_velocity_difference_when_grip_fraction_is_zero() {
 }
 
 #[test]
+fn wheel_slip_falls_back_to_wheel_rotation_when_patch_velocities_are_missing() {
+    let mut bytes = fixture(0, 123.5);
+    let wheel = VEHICLES + WHEELS;
+    put_float(&mut bytes, wheel + TIRE_LOAD, 1_000.0);
+    put_float(&mut bytes, wheel + ROTATION, 100.0);
+    bytes[wheel + STATIC_UNDEFLECTED_RADIUS] = 33;
+    put_float(&mut bytes, wheel + LONGITUDINAL_GROUND_VELOCITY, 20.0);
+    put_float(&mut bytes, wheel + LATERAL_PATCH_VELOCITY, f64::NAN);
+    put_float(&mut bytes, wheel + LONGITUDINAL_PATCH_VELOCITY, f64::NAN);
+    put_float(&mut bytes, wheel + LATERAL_GROUND_VELOCITY, f64::NAN);
+    put_float(&mut bytes, wheel + SLIDING_FRACTION, 0.0);
+
+    let slip = decode(&bytes, Instant::now())
+        .unwrap()
+        .unwrap()
+        .frame
+        .wheel_slip
+        .unwrap()[0];
+    assert!((slip - 0.393_939_4).abs() < 0.001);
+}
+
+#[test]
 fn malformed_layouts_and_numbers_fail_closed() {
     let now = Instant::now();
     let data = fixture(0, 1.0);

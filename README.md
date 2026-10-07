@@ -2,11 +2,6 @@
 
 <a href="https://commons.wikimedia.org/wiki/File:24h_N%C3%BCrburgring_2014_-_Night_Impression.jpg"><img src="https://commons.wikimedia.org/wiki/Special:FilePath/24h%20N%C3%BCrburgring%202014%20-%20Night%20Impression.jpg?width=1600" alt="24 Hours of Nürburgring at night" width="100%"></a>
 
-<img src="assets/race2love-icon.png" alt="Race2Love icon" width="96">
-
-The bundled mark is used consistently in the native window, desktop launcher, and
-in-app header.
-
 # Race2Love
 
 ### Racing telemetry, translated into touch.
@@ -349,7 +344,9 @@ reduces torn reads but cannot guarantee a fully atomic producer transaction.
 not expose a supported backing descriptor can prevent access. These conditions
 appear on Dashboard and leave output stopped. See [LMU.md](docs/LMU.md) for exact
 heuristics, synchronization limits, reference licenses and test status.
-Wheel slip uses the SDK sliding contact-patch fraction. Road feedback combines
+Wheel slip uses the SDK sliding contact-patch fraction, with patch/ground velocity
+and wheel-rotation fallbacks for car packages that do not publish the direct
+sliding value. Road feedback combines
 suspension travel speed, high-pass vertical acceleration and explicit rumble-strip
 contact when provided. Some LMU tracks leave that flag false, so road feedback
 does not depend on it. Impact pulses require a new game-reported impact event.

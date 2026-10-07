@@ -71,36 +71,7 @@ pub fn decode(bytes: &[u8], observed: Instant) -> Result<Option<DecodedFrame>, D
         std::array::from_fn(|index| &car[WHEELS + index * WHEEL_SIZE..][..WHEEL_SIZE]);
     let suspension_deflection =
         optional_four(|index| optional_number(wheels[index], SUSPENSION_DEFLECTION, -2.0, 2.0));
-    let wheel_slip = optional_four(|index| {
-        let wheel = wheels[index];
-        let load = optional_number(wheel, TIRE_LOAD, 0.0, 1e7)?;
-        if load < 50.0 {
-            return Some(0.0);
-        }
-        // mGripFract is the best direct signal, but some LMU builds report it
-        // as zero even while the contact patch is sliding. The SDK also exposes
-        // patch and ground velocities; their normalized difference is a useful
-        // fallback for longitudinal and lateral slip.
-        let sliding = optional_number(wheel, SLIDING_FRACTION, 0.0, 1.0).unwrap_or(0.0);
-        let kinematic = match (
-            optional_number(wheel, LATERAL_PATCH_VELOCITY, -2_000.0, 2_000.0),
-            optional_number(wheel, LONGITUDINAL_PATCH_VELOCITY, -2_000.0, 2_000.0),
-            optional_number(wheel, LATERAL_GROUND_VELOCITY, -2_000.0, 2_000.0),
-            optional_number(wheel, LONGITUDINAL_GROUND_VELOCITY, -2_000.0, 2_000.0),
-        ) {
-            (Some(patch_lat), Some(patch_long), Some(ground_lat), Some(ground_long)) => {
-                let relative = (patch_lat - ground_lat).hypot(patch_long - ground_long);
-                let ground_speed = ground_lat.hypot(ground_long);
-                if ground_speed >= 1.0 {
-                    (relative / ground_speed).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                }
-            }
-            _ => 0.0,
-        };
-        Some(sliding.max(kinematic))
-    });
+    let wheel_slip = optional_four(|index| wheel_slip_signal(wheels[index], velocity[2] as f32));
     let kerb_contact = wheels
         .iter()
         .all(|wheel| wheel[SURFACE_TYPE] <= 6)
@@ -170,6 +141,67 @@ pub fn decode(bytes: &[u8], observed: Instant) -> Result<Option<DecodedFrame>, D
         game_version: version,
         suspension_deflection,
     }))
+}
+
+/// Return a normalized sliding signal for one loaded wheel.
+///
+/// `mGripFract` is not populated for every LMU car. The SDK still publishes
+/// patch/ground velocities on those cars, and wheel rotation plus the static
+/// radius provides a second fallback for wheelspin/lockup when those velocity
+/// fields are also unavailable. All three signals are estimates of contact
+/// slip, rather than a vehicle-level slip angle.
+fn wheel_slip_signal(wheel: &[u8], vehicle_longitudinal_speed: f32) -> Option<f32> {
+    let load = optional_number(wheel, TIRE_LOAD, 0.0, 1e7)?;
+    if load < 50.0 {
+        return Some(0.0);
+    }
+
+    let sliding = optional_number(wheel, SLIDING_FRACTION, 0.0, 1.0).unwrap_or(0.0);
+    let kinematic = match (
+        optional_number(wheel, LATERAL_PATCH_VELOCITY, -2_000.0, 2_000.0),
+        optional_number(wheel, LONGITUDINAL_PATCH_VELOCITY, -2_000.0, 2_000.0),
+        optional_number(wheel, LATERAL_GROUND_VELOCITY, -2_000.0, 2_000.0),
+        optional_number(wheel, LONGITUDINAL_GROUND_VELOCITY, -2_000.0, 2_000.0),
+    ) {
+        (Some(patch_lat), Some(patch_long), Some(ground_lat), Some(ground_long)) => {
+            let relative = (patch_lat - ground_lat).hypot(patch_long - ground_long);
+            let ground_speed = ground_lat.hypot(ground_long);
+            if ground_speed >= 1.0 {
+                (relative / ground_speed).clamp(0.0, 1.0)
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
+    };
+
+    // Some current LMU car packages zero all patch/ground velocity fields too.
+    // Compare the wheel's circumferential speed with its ground speed so
+    // throttle wheelspin and braking lockup still produce a useful signal.
+    let rotational = match (
+        optional_number(wheel, ROTATION, -2_000.0, 2_000.0),
+        wheel.get(STATIC_UNDEFLECTED_RADIUS).copied(),
+        optional_number(wheel, LONGITUDINAL_GROUND_VELOCITY, -2_000.0, 2_000.0),
+    ) {
+        (Some(rotation), Some(radius_cm), Some(ground_long)) if (10..=100).contains(&radius_cm) => {
+            let wheel_speed = rotation.abs() * (f32::from(radius_cm) / 100.0);
+            // A few car packages publish a zero wheel ground speed while the
+            // car velocity remains valid. Use the vehicle longitudinal speed
+            // in that case so wheelspin is not mistaken for missing motion.
+            let ground_long = if ground_long.abs() < 1.0 && vehicle_longitudinal_speed.abs() >= 1.0
+            {
+                vehicle_longitudinal_speed
+            } else {
+                ground_long
+            };
+            let ground_speed = ground_long.abs();
+            let denominator = wheel_speed.max(ground_speed).max(1.0);
+            ((wheel_speed - ground_speed).abs() / denominator).clamp(0.0, 1.0)
+        }
+        _ => 0.0,
+    };
+
+    Some(sliding.max(kinematic).max(rotational))
 }
 
 fn optional_number(bytes: &[u8], offset: usize, min: f64, max: f64) -> Option<f32> {
