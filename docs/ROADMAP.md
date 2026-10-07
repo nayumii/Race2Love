@@ -11,7 +11,7 @@ fault acceptance continue to benefit from real driving tests.
 
 Implemented a consistent dark cockpit theme with mint/violet accents, clear
 feedback output/activity cards, an actual RPM-response preview,
-grouped effect/device controls and a native vector brand mark. Wide windows use
+grouped effect/device controls and a bundled Race2Love brand mark. Wide windows use
 sidebar navigation; smaller windows use tabs and stacked cards. Stop/Resume
 stay visible above scrolling content, and Esc still stops output on every page.
 Existing controls, configuration and background workers remain in place.

@@ -1042,12 +1042,13 @@ pub fn run(
     device: Arc<dyn HapticDevice>,
     demo: Arc<dyn HapticDevice>,
 ) -> eframe::Result {
+    let icon = app_icon();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1200.0, 860.0])
             .with_min_inner_size([620.0, 540.0])
             .with_app_id("race2love")
-            .with_icon(egui::IconData::default()),
+            .with_icon(icon),
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
@@ -1066,6 +1067,18 @@ pub fn run(
             ))
         }),
     )
+}
+
+fn app_icon() -> egui::IconData {
+    let image = image::load_from_memory(include_bytes!("../../../assets/race2love-icon.png"))
+        .expect("bundled Race2Love icon must be valid PNG")
+        .to_rgba8();
+    let (width, height) = image.dimensions();
+    egui::IconData {
+        rgba: image.into_raw(),
+        width,
+        height,
+    }
 }
 
 #[cfg(test)]

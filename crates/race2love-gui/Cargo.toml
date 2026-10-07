@@ -9,6 +9,7 @@ description = "Native egui interface for Race2Love"
 
 [dependencies]
 eframe.workspace = true
+image.workspace = true
 race2love-core.workspace = true
 race2love-lovense.workspace = true
 race2love-lmu.workspace = true

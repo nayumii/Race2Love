@@ -18,6 +18,7 @@ race2love-lmu = { path = "crates/race2love-lmu" }
 windows = { version = "0.62.2", default-features = false, features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Security"] }
 # 0.34 supports Rust 1.92; 0.36 requires 1.95. Glow avoids the larger wgpu stack.
 eframe = { version = "0.34.3", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Current reqwest, HTTP/1 + JSON + verified TLS only; no HTTP/2/compression/proxies.

@@ -1,6 +1,11 @@
 <div align="center">
 
-<a href="https://store.steampowered.com/app/2399420/Le_Mans_Ultimate/"><img src="https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/2399420/f510badbf573eecdf529ae735a49331f4b9919be/header.jpg" alt="Le Mans Ultimate" width="100%"></a>
+<a href="https://commons.wikimedia.org/wiki/File:24h_N%C3%BCrburgring_2014_-_Night_Impression.jpg"><img src="https://commons.wikimedia.org/wiki/Special:FilePath/24h%20N%C3%BCrburgring%202014%20-%20Night%20Impression.jpg?width=1600" alt="24 Hours of Nürburgring at night" width="100%"></a>
+
+<img src="assets/race2love-icon.png" alt="Race2Love icon" width="96">
+
+The bundled mark is used consistently in the native window, desktop launcher, and
+in-app header.
 
 # Race2Love
 
@@ -93,10 +98,10 @@ Release readiness includes reproducible Linux and Windows packages, checksums,
 CI artifacts and dependency notices. Read the [roadmap](docs/ROADMAP.md) and
 [validation record](docs/VALIDATION.md) for the current status.
 
-> Banner image: official **Le Mans Ultimate** artwork served from the [Steam
-> store page](https://store.steampowered.com/app/2399420/Le_Mans_Ultimate/), © Studio
-> 397 / Steam. Race2Love is an independent telemetry companion and is not
-> affiliated with Studio 397, Motorsport Games or Valve.
+> Banner image: [“24h Nürburgring 2014 – Night Impression”](https://commons.wikimedia.org/wiki/File:24h_N%C3%BCrburgring_2014_-_Night_Impression.jpg)
+> by [Marc Strauch](https://www.flickr.com/photos/m_strauch/15029863914), used under
+> [CC BY 2.0](https://creativecommons.org/licenses/by/2.0/). Cropped for the
+> README banner. Race2Love is an independent telemetry companion.
 
 ## Screenshots
 

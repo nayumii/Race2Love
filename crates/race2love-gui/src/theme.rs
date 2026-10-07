@@ -86,22 +86,14 @@ pub fn page_title(ui: &mut egui::Ui, title: &str, description: &str) {
 
 pub fn brand(ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(34.0, 34.0), egui::Sense::hover());
-        ui.painter()
-            .rect_filled(rect, 9.0, Color32::from_rgb(28, 61, 59));
-        let points = [
-            (0.15, 0.56),
-            (0.32, 0.56),
-            (0.43, 0.26),
-            (0.58, 0.76),
-            (0.70, 0.43),
-            (0.86, 0.43),
-        ]
-        .map(|(x, y)| rect.min + egui::vec2(x * rect.width(), y * rect.height()));
-        ui.painter().add(egui::Shape::line(
-            points.to_vec(),
-            egui::Stroke::new(2.0, ACCENT),
-        ));
+        ui.add(
+            egui::Image::from_bytes(
+                "bytes://race2love-icon.png",
+                include_bytes!("../../../assets/race2love-icon.png"),
+            )
+            .fit_to_exact_size(egui::vec2(34.0, 34.0))
+            .corner_radius(9.0),
+        );
         ui.label(RichText::new("Race2Love").size(21.0).strong());
     });
 }

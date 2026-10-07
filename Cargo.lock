@@ -2083,6 +2083,7 @@ name = "race2love-gui"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "image",
  "race2love-core",
  "race2love-lmu",
  "race2love-lovense",
