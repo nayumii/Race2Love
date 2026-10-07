@@ -1,0 +1,28 @@
+{
+  "packages": {
+    "accesskit@0.24.1": "accesskit-0.24.1",
+    "ecolor@0.34.3": "egui-0.34.3",
+    "eframe@0.34.3": "egui-0.34.3",
+    "egui@0.34.3": "egui-0.34.3",
+    "egui-wgpu@0.34.3": "egui-0.34.3",
+    "egui-winit@0.34.3": "egui-0.34.3",
+    "egui_glow@0.34.3": "egui-0.34.3",
+    "emath@0.34.3": "egui-0.34.3",
+    "epaint@0.34.3": "egui-0.34.3",
+    "gl_generator@0.14.0": "gl_generator-0.14.0",
+    "khronos_api@3.1.0": "khronos_api-3.1.0",
+    "profiling@1.0.18": "profiling-1.0.18",
+    "hexf-parse@0.2.1": "hexf-parse-0.2.1"
+  },
+  "sources": {
+    "accesskit-0.24.1/LICENSE-MIT": "https://raw.githubusercontent.com/AccessKit/accesskit/a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969/LICENSE-MIT",
+    "accesskit-0.24.1/LICENSE-APACHE": "https://raw.githubusercontent.com/AccessKit/accesskit/a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969/LICENSE-APACHE",
+    "egui-0.34.3/LICENSE-MIT": "https://raw.githubusercontent.com/emilk/egui/65cb282a198d2dd72b6ca2346cc73eba45b7a830/LICENSE-MIT",
+    "egui-0.34.3/LICENSE-APACHE": "https://raw.githubusercontent.com/emilk/egui/65cb282a198d2dd72b6ca2346cc73eba45b7a830/LICENSE-APACHE",
+    "gl_generator-0.14.0/LICENSE": "https://raw.githubusercontent.com/brendanzab/gl-rs/ea503e8d5fb6d73c6030e6191ce738cd3bf3433e/LICENSE",
+    "khronos_api-3.1.0/LICENSE": "https://raw.githubusercontent.com/brendanzab/gl-rs/f150967b1c44ae888e6676f93f639ebc82771bdc/LICENSE",
+    "profiling-1.0.18/LICENSE-MIT": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-MIT",
+    "profiling-1.0.18/LICENSE-APACHE": "https://raw.githubusercontent.com/aclysma/profiling/8271551172eb6fa4cba47369aedd93790c623df9/LICENSE-APACHE",
+    "hexf-parse-0.2.1/LICENSE-CC0": "https://raw.githubusercontent.com/spdx/license-list-data/v3.26.0/text/CC0-1.0.txt"
+  }
+}

@@ -1,0 +1,71 @@
+name: Release packages
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+# Artifacts only: this workflow cannot publish a GitHub Release or push commits.
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            package: linux-x86_64
+            target: x86_64-unknown-linux-gnu
+          - os: windows-2022
+            package: windows-msvc-x86_64
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    env:
+      CARGO_TERM_COLOR: always
+      RACE2LOVE_CONFIG: ${{ runner.temp }}/race2love-release-test.toml
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11'
+      - name: Validate tag version
+        shell: python
+        run: |
+          import os, pathlib, tomllib
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version']
+          if os.environ['GITHUB_REF_TYPE'] == 'tag':
+              expected = 'v' + version
+              if os.environ['GITHUB_REF_NAME'] != expected:
+                  raise SystemExit(f'Tag must match Cargo version: {expected}')
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+      - name: Rust stable
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy --target ${{ matrix.target }}
+      - run: cargo +stable fmt --all --check
+      - run: cargo +stable clippy --workspace --all-targets --locked --target ${{ matrix.target }} -- -D warnings
+      - run: cargo +stable test --workspace --locked --target ${{ matrix.target }}
+      - run: python -m unittest discover -s tools/tests -v
+      - name: Build archive
+        env:
+          RUSTUP_TOOLCHAIN: stable
+        run: python tools/build-release.py --target ${{ matrix.package }} --output-dir dist
+      - name: Verify and smoke-test packaged executable
+        run: python tools/verify-release.py --directory dist --expected-commit ${{ github.sha }} --smoke
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Race2Love-${{ matrix.package }}-${{ github.sha }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

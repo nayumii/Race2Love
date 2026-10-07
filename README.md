@@ -1,77 +1,97 @@
+<div align="center">
+
+<img src="assets/race2love-banner.png" alt="Race2Love telemetry flowing from an endurance racing car" width="100%">
+
 # Race2Love
 
-Race2Love is a native Rust desktop application for turning racing telemetry into
-configurable haptic feedback. The first simulator/device target is **Le Mans
-Ultimate → Lovense Remote/Game Mode**, on Linux with Steam/Proton and Windows
-10/11. The design uses no SimHub, Electron, browser frontend, or mandatory cloud
-service.
+### Racing telemetry, translated into touch.
 
-**Phase 7 implementation:** the application starts with **Demo telemetry** and an
-**in-memory mock device**. The local Lovense backend is available through an
-explicit Connect and toy selection. **Direct Windows and Proton LMU** is selectable on
-Dashboard or with `--lmu`. The owner reports
-successful Lovense hardware testing, live Proton LMU output after Resume, and the
-corrected Windows build working. RPM/gear effects, the priority mixer and global
-scaling share one pipeline across both platforms. Optional wheel-slip, road and
-impact effects, bounded live graphs and named effect profiles are now available.
-See [effect signals and tuning](docs/EFFECTS.md). See [validation status](docs/VALIDATION.md)
-for automated checks, live telemetry reports and remaining acceptance.
+<p>Native Rust haptics for <strong>Le Mans Ultimate</strong> and Lovense devices.<br>
+Low latency. Local first. Built for Linux + Proton and Windows.</p>
 
-The native UI has a dark cockpit theme centered on mixer output, device output,
-effect activity and intensity controls, with responsive sidebar/tab navigation.
-Enable **Devices / Settings → Debug mode** for live driving telemetry, raw-signal
-graphs and technical runtime settings. Connection options hold advanced transport
-and experimental output controls.
-Emergency Stop and Resume remain above the scrolling pages. The default window
-is 1200 × 860; compact layouts work down to 620 × 540.
+<a href="#quick-start">Quick start</a> ·
+<a href="#what-it-does">What it does</a> ·
+<a href="docs/INSTALL.md">Install guide</a> ·
+<a href="docs/VALIDATION.md">Validation</a>
 
-**Next: Phase 8 — release readiness**, including packaging, automated release
-builds and installation documentation. See [the roadmap](docs/ROADMAP.md).
+<br><br>
 
-## Try Demo
+<img src="https://img.shields.io/badge/Rust-native-000?logo=rust&logoColor=white" alt="Rust native">
+<img src="https://img.shields.io/badge/Platforms-Linux%20%2B%20Windows-172033" alt="Linux and Windows">
+<img src="https://img.shields.io/badge/Telemetry-LMU-18c7a0" alt="LMU telemetry">
+<img src="https://img.shields.io/badge/License-PolyForm%20Noncommercial-7557d6" alt="PolyForm Noncommercial">
 
-Install Rust stable **1.92 or later** using [rustup](https://rustup.rs/). The GUI
-uses eframe 0.34.3 with its OpenGL renderer and bundled fonts. X11 and Wayland are
-enabled; the larger wgpu renderer is disabled. The dependency version supports
-the declared minimum compiler version: [eframe workspace manifest](https://github.com/emilk/egui/blob/0.34.3/Cargo.toml).
+</div>
 
-From the repository directory:
+Race2Love is a lightweight desktop application that turns racing signals into
+configurable, physical feedback. It reads LMU telemetry directly, maps it through
+independent effects and a priority mixer, then sends one safe normalized output to
+Lovense Remote/Game Mode. There is no SimHub dependency, browser frontend,
+Electron shell or mandatory cloud service.
+
+<div align="center">
+
+**LMU → normalized telemetry → effects → mixer → Lovense**
+
+</div>
+
+## Quick start
+
+### Try it without LMU or hardware
+
+Install Rust stable **1.92 or later**, then run the built-in Demo mode:
 
 ```sh
 cargo run --locked -- --demo
 ```
 
-The native window has three views:
-
-- **Dashboard:** live speed, RPM, gear, throttle, brake, connection indicators,
-  mixed/scaled/acknowledged output, Demo/LMU selection, telemetry pause, and
-  global intensity controls.
-- **Effects:** RPM thresholds expressed as percentages of maximum RPM, vibration
-  range, linear/exponential/logarithmic curves, and shift pulse envelopes.
-- **Devices / Settings:** saved Lovense host/port preferences, update rates,
-telemetry timeout, start-minimized, debug values, and configuration location.
-  Connect/discover, explicit toy selection, timed test vibration, output-mode
-  comparison, and disconnect.
-
-Effect changes apply immediately when valid. Remote address/policy changes latch
-output off and apply when you click Connect. **Emergency Stop** (also **Esc**) latches
-output off until **Resume output** is clicked. Pausing or switching telemetry
-also stops output; switching requires Resume.
-Changed settings save on normal exit; **Save settings** saves explicitly.
-
-For a display-free smoke run of the same workers:
+For a display-free pipeline smoke test:
 
 ```sh
 cargo run --locked -- --demo-seconds 5
 ```
 
-For a build that skips compiling native display dependencies, use
-`cargo run --locked --no-default-features -- --demo-seconds 5`. Cargo still needs registry
-metadata for workspace dependencies on its first resolution.
+The Demo source ramps RPM, shifts gears and produces slip, road and impact events.
+The mock device keeps the whole pipeline safe to develop without a connected toy.
 
-The command prints a telemetry/output summary, then awaits the workers' shutdown
-and final device stop. The display-free Demo never accesses hardware. The GUI also starts with mock
-output; physical output requires Connect, toy selection, and explicit Resume.
+### Connect real hardware
+
+1. Start Lovense Remote and enable **Game Mode**.
+2. Open Race2Love → **Devices / Settings**, set the Remote host and port, then
+   **Connect** and select a toy.
+3. Choose **LMU** on the Dashboard, enter a driving session and click **Resume
+   output**. The global Stop button and `Esc` always provide an immediate stop.
+
+See [the installation guide](docs/INSTALL.md) for platform dependencies,
+configuration paths and troubleshooting.
+
+## What it does
+
+| Signal | Feedback | Control |
+| --- | --- | --- |
+| Engine RPM | Continuous vibration with linear, exponential or logarithmic response | Start/end thresholds, min/max intensity |
+| Gear changes | Short pulse with envelope shaping | Intensity, duration, attack/release |
+| Wheel slip | Smoothed grip-loss feedback | Threshold, gain, ceiling |
+| Road / kerb movement | Suspension and acceleration response | Threshold, intensity, debug graph |
+| Impacts | Significant acceleration events | Threshold, intensity, cooldown |
+
+The output is clamped, globally scaled and rate-limited before it reaches the
+device. Telemetry loss, game exit, Remote disconnect, emergency stop and normal
+shutdown all stop output safely.
+
+## Product surface
+
+- **Dashboard** keeps attention on connection state, effect activity, mixer output
+  and device output. Driving telemetry is available in Debug mode when tuning.
+- **Effects** exposes focused controls and a live RPM response preview.
+- **Devices / Settings** handles Lovense connection, toy selection, test vibration,
+  reconnect policy, profiles, logging and configuration.
+- **Debug mode** reveals raw telemetry, bounded graphs and runtime diagnostics when
+  you need to investigate a track or telemetry adapter.
+
+Release readiness includes reproducible Linux and Windows packages, checksums,
+CI artifacts and dependency notices. Read the [roadmap](docs/ROADMAP.md) and
+[validation record](docs/VALIDATION.md) for the current status.
 
 ## Linux setup
 
@@ -111,6 +131,44 @@ The TLS crypto provider needs the C/C++ compiler supplied by those Build Tools.
 The complete workspace also passes a Windows GNU target check from Linux using
 Clang with the validation-only flags recorded in [VALIDATION.md](docs/VALIDATION.md).
 Normal Windows GNU builds use MinGW. Native MSVC build/runtime validation remains.
+
+## Build and package both releases from Linux
+
+From x86-64 Linux, run this one command (Python 3.11 or later is required):
+
+```sh
+python3 tools/build-release.py
+```
+
+It builds optimized Linux and Windows x64 executables with stripped symbols and
+thin LTO, then creates these files in `dist/`:
+
+- `Race2Love-0.1.0-linux-x86_64.tar.gz`
+- `Race2Love-0.1.0-windows-x86_64.zip`
+- `SHA256SUMS.txt`
+
+Each archive contains just the executable, launch instructions, example settings,
+license file and build information. Windows also includes LMU and log launchers.
+Send the archives, rather than `target/`: Cargo keeps dependencies, intermediate
+files and debug builds there, which can take hundreds of MB. Without `--release`,
+`cargo build --target ...` produces a larger debug executable.
+
+One-time cross-compilation setup, in addition to the Linux dependencies above:
+
+```sh
+rustup target add x86_64-pc-windows-gnu
+# CachyOS / Arch:
+sudo pacman -S --needed mingw-w64-gcc mingw-w64-binutils
+# Debian / Ubuntu alternative:
+# sudo apt-get install gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+```
+
+The script selects the MinGW linker and C compiler automatically. Existing
+`CARGO_TARGET_DIR` and compiler environment overrides are respected. Use
+`--offline` to build from cached dependencies, or `--output-dir PATH` to choose
+the archive directory. Subsequent runs reuse Cargo's build cache.
+Linux packages use the build host's glibc and desktop libraries; build on your
+oldest supported Linux distribution if you need broader compatibility.
 
 ## Architecture
 
@@ -344,6 +402,8 @@ end-to-end latency have not been benchmarked.
 
 ## License
 
-[LICENSE](LICENSE) is a placeholder pending the owner's license selection. It
-does not grant open-source redistribution rights yet. All packages are marked
-`publish = false` until that decision is made.
+Race2Love is source-available under the [PolyForm Noncommercial License
+1.0.0](LICENSE). Commercial use, including resale, is not permitted by that
+license. Redistributed copies must retain [NOTICE](NOTICE), the license text and
+the relevant third-party notices. The project name and attribution are
+**Race2Love**; no UI credit is required by the license.

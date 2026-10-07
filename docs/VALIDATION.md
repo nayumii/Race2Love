@@ -12,6 +12,16 @@ Existing safety, connection and persistence tests pass. Formatting, workspace
 check, and strict all-target Clippy pass for Linux and Windows GNU. This change
 preserves configuration values and the existing telemetry/device pipeline.
 
+# Phase 8 release validation
+
+Recorded 2026-10-07. `tools/tests/test_release.py` passes all four packaging
+contract tests. An offline release build produced Linux x86_64 and Windows GNU
+archives plus `SHA256SUMS.txt`; `tools/verify-release.py` accepted both archives,
+including their required members, executable hashes, target metadata and
+checksums. The release workflow adds a native Windows MSVC matrix entry for
+tagged builds. The native Windows runner remains the final environment-specific
+check before publishing a release.
+
 # Phase 7 UI validation
 
 Recorded 2026-10-06, Rust/Cargo 1.94.1. Formatting, workspace/all-target checks

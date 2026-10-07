@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
 publish = false
+license = "PolyForm-Noncommercial-1.0.0"
 
 [workspace.dependencies]
 race2love-core = { path = "crates/race2love-core" }
@@ -35,6 +36,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license.workspace = true
 description = "Native racing telemetry to configurable haptic feedback"
 
 [features]
@@ -58,3 +60,7 @@ all = "warn"
 
 [lints]
 workspace = true
+
+[profile.release]
+strip = "symbols"
+lto = "thin"

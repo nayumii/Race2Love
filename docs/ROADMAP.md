@@ -18,10 +18,17 @@ Existing controls, configuration and background workers remain in place.
 
 ## Phase 8: Release readiness
 
-Next: finalize Linux/Windows packaging, automate release builds and artifacts,
-and improve installation/setup documentation. Use the existing CI and packaging
-work as a starting point. Native Windows/MSVC, high-DPI and Wayland acceptance,
-plus the project's license selection, remain explicit release considerations.
+Implemented reproducible portable packages for Linux x86_64, Windows GNU
+cross-builds, and native Windows MSVC builds. `tools/build-release.py` embeds
+build metadata, checksums, the PolyForm license, attribution and dependency
+notices. `tools/verify-release.py` validates archive contents, executable
+identity, hashes and optional Demo smoke runs. CI runs the packaging contract
+tests and publishes verified artifacts for version tags. The installation guide
+covers configuration paths, Lovense setup, upgrades and troubleshooting.
+
+Remaining acceptance work is environment-specific: run the tagged workflow on a
+native Windows runner, review high-DPI and Wayland behavior, and publish only
+after the generated artifacts have passed the project's release checklist.
 
 The everyday UI prioritizes feedback and device control. Live driving telemetry,
 raw-signal graphs, intermediate output targets and technical runtime settings
